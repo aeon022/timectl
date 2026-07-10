@@ -61,6 +61,14 @@ var (
 
 	styleMuted = lipgloss.NewStyle().
 			Foreground(colorMuted)
+
+	styleGreen = lipgloss.NewStyle().
+			Foreground(colorGreen)
+
+	panelStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorMuted).
+			Padding(0, 1)
 )
 
 // ── Views ────────────────────────────────────────────────────────────────────
@@ -80,6 +88,14 @@ type refreshMsg struct{}
 type errMsg struct{ err error }
 type weekLoadedMsg struct{ summaries []models.DaySummary }
 type statsLoadedMsg struct{ text string }
+type heatLoadedMsg struct{ data []heatDay }
+
+// ── Heat data ─────────────────────────────────────────────────────────────────
+
+type heatDay struct {
+	date  time.Time
+	total time.Duration
+}
 
 // ── Input mode ────────────────────────────────────────────────────────────────
 
@@ -109,6 +125,10 @@ type model struct {
 
 	weekSummaries []models.DaySummary
 	statsText     string
+
+	heatData   []heatDay
+	heatLoaded bool
+	animStep   int
 }
 
 func newModel(s *store.Store) model {
@@ -124,7 +144,7 @@ func newModel(s *store.Store) model {
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(doRefresh(m.store), tick())
+	return tea.Batch(doRefresh(m.store), tick(), cmdLoadHeat(m.store))
 }
 
 func tick() tea.Cmd {
@@ -135,6 +155,26 @@ func tick() tea.Cmd {
 
 func doRefresh(s *store.Store) tea.Cmd {
 	return func() tea.Msg { return refreshMsg{} }
+}
+
+func cmdLoadHeat(s *store.Store) tea.Cmd {
+	return func() tea.Msg {
+		entries, err := s.RecentDays(30)
+		if err != nil {
+			return heatLoadedMsg{}
+		}
+		dayMap := map[string]time.Duration{}
+		for _, e := range entries {
+			dayMap[e.StartedAt.Format("2006-01-02")] += e.ComputedDuration()
+		}
+		today := time.Now()
+		data := make([]heatDay, 30)
+		for i := range data {
+			d := today.AddDate(0, 0, -(29 - i))
+			data[i] = heatDay{date: d, total: dayMap[d.Format("2006-01-02")]}
+		}
+		return heatLoadedMsg{data: data}
+	}
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -150,6 +190,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		running, _ := m.store.Running()
 		m.running = running
+		m.animStep++
 		return m, tick()
 
 	case refreshMsg:
@@ -165,6 +206,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cursor >= len(m.entries) {
 			m.cursor = maxInt(0, len(m.entries)-1)
 		}
+		return m, nil
+
+	case heatLoadedMsg:
+		m.heatData = msg.data
+		m.heatLoaded = true
 		return m, nil
 
 	case weekLoadedMsg:
@@ -380,80 +426,224 @@ func (m model) View() string {
 }
 
 func (m model) mainView() string {
-	var b strings.Builder
+	w, h := m.width, m.height
+	if w < 40 {
+		w = 80
+	}
+	if h < 20 {
+		h = 24
+	}
 
-	b.WriteString(styleHeader.Render("timectl") + "\n")
+	heatW := 30
+	rightW := w - heatW - 6
+	if rightW < 20 {
+		rightW = 20
+	}
 
+	left := panelStyle.Width(heatW).Height(h - 6).Render(m.renderHeatmap())
+	right := panelStyle.Width(rightW).Height(h - 6).Render(m.renderToday(rightW, h-6))
+	panels := lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right)
+
+	var footer string
+	switch {
+	case m.imode != modeNone:
+		footer = m.renderInput()
+	case m.errMsg != "":
+		footer = styleRed.Render("Error: " + m.errMsg)
+	default:
+		footer = styleFooter.Render("n start · s stop · e notes · d delete · j/k · w week · v stats · q quit")
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		styleHeader.Render("timectl"),
+		panels,
+		footer,
+	)
+}
+
+func (m model) renderHeatmap() string {
+	today := time.Now()
+	totalMap := map[string]time.Duration{}
+	for _, d := range m.heatData {
+		totalMap[d.date.Format("2006-01-02")] = d.total
+	}
+
+	days := make([]time.Time, 30)
+	for i := range days {
+		days[29-i] = today.AddDate(0, 0, -i)
+	}
+
+	cells := make([]string, int(days[0].Weekday()))
+	for i := range cells {
+		cells[i] = "  "
+	}
+	for _, d := range days {
+		cells = append(cells, heatCellHours(totalMap[d.Format("2006-01-02")]))
+	}
+	for len(cells)%7 != 0 {
+		cells = append(cells, "  ")
+	}
+
+	var lines []string
+	lines = append(lines, styleMuted.Render("last 30 days"))
+	lines = append(lines, "")
+	lines = append(lines, styleMuted.Render("S M T W T F S"))
+	for i := 0; i < len(cells); i += 7 {
+		lines = append(lines, strings.Join(cells[i:i+7], " "))
+	}
+
+	// Today total + streak.
+	var todayTotal time.Duration
+	for _, e := range m.entries {
+		todayTotal += e.ComputedDuration()
+	}
+	lines = append(lines, "")
+	lines = append(lines, styleMuted.Render("today"))
+	if todayTotal > 0 {
+		lines = append(lines, styleGreen.Render(models.FormatDuration(todayTotal)))
+	} else {
+		lines = append(lines, styleMuted.Render("nothing yet"))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func heatCellHours(d time.Duration) string {
+	b := "█"
+	h := d.Hours()
+	switch {
+	case h == 0:
+		return styleMuted.Render(b)
+	case h < 2:
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "71", Dark: "22"}).Render(b)
+	case h < 4:
+		return styleGreen.Render(b)
+	default:
+		return styleGreen.Bold(true).Render(b)
+	}
+}
+
+func (m model) renderToday(width, height int) string {
+	var lines []string
+
+	// Header: running timer or idle.
 	if m.running != nil {
+		spins := [4]string{"⠋", "⠙", "⠹", "⠸"}
+		spin := spins[m.animStep%4]
 		elapsed := models.FormatDuration(m.running.ComputedDuration())
 		proj := ""
 		if m.running.Project != "" {
 			proj = " (" + m.running.Project + ")"
 		}
-		b.WriteString(styleRunning.Render(fmt.Sprintf("▶ %s%s — %s", m.running.Task, proj, elapsed)) + "\n")
+		lines = append(lines,
+			styleRunning.Render(fmt.Sprintf("▶ %s%s", m.running.Task, proj))+
+				"  "+styleMuted.Render(elapsed)+"  "+styleAmber.Render(spin))
 	} else {
-		b.WriteString(styleMuted.Render("No timer running") + "\n")
+		lines = append(lines, styleMuted.Render("No timer running"))
 	}
-
-	b.WriteString("\n")
+	lines = append(lines, styleDivider.Render(strings.Repeat("─", width-4)))
 
 	if len(m.entries) == 0 {
-		b.WriteString(styleMuted.Render("  No entries today. Press n to start a timer.") + "\n")
-	} else {
-		var total time.Duration
-		for i, e := range m.entries {
-			d := e.ComputedDuration()
-			total += d
+		lines = append(lines, "", styleMuted.Render("  Press n to start a timer."))
+		return strings.Join(lines, "\n")
+	}
 
-			start := e.StartedAt.Format("15:04")
-			stop := "     "
-			if e.StoppedAt != nil {
-				stop = e.StoppedAt.Format("15:04")
-			}
+	// Compute max duration for bar scaling.
+	var maxDur time.Duration
+	for _, e := range m.entries {
+		if d := e.ComputedDuration(); d > maxDur {
+			maxDur = d
+		}
+	}
+	if maxDur == 0 {
+		maxDur = time.Second
+	}
 
-			proj := ""
-			if e.Project != "" {
-				proj = " [" + e.Project + "]"
-			}
+	// Row layout (manual 1-space padding on each side):
+	// contentW = width - 2
+	// fixed = indicator(2) + time(5) + sep(2) + [bar](14) + sep(2) + dur(9) = 34
+	// taskW = contentW - 34
+	contentW := width - 2
+	barW := 12
+	fixed := 2 + 5 + 2 + barW + 2 + 2 + 9
+	taskW := contentW - fixed
+	if taskW < 6 {
+		taskW = 6
+	}
 
-			line := fmt.Sprintf("  %s – %s  %-7s  %-30s%s",
-				start, stop, models.FormatDuration(d), e.Task, proj)
+	var total time.Duration
+	for i, e := range m.entries {
+		d := e.ComputedDuration()
+		total += d
 
-			if i == m.cursor {
-				b.WriteString(styleSelected.Render(line) + "\n")
-			} else {
-				b.WriteString(styleNormal.Render(line) + "\n")
-			}
+		// Indicator.
+		indicator := "  "
+		if e.IsRunning() {
+			indicator = styleGreen.Render("▶") + " "
 		}
 
-		b.WriteString(styleDivider.Render("  "+strings.Repeat("─", 60)) + "\n")
-		b.WriteString(styleBlue.Render(fmt.Sprintf("  Total: %s", models.FormatDuration(total))) + "\n")
-	}
+		// Start time.
+		startStr := e.StartedAt.Format("15:04")
 
-	if m.errMsg != "" {
-		b.WriteString("\n" + styleRed.Render("  Error: "+m.errMsg) + "\n")
-	}
-
-	if m.imode != modeNone {
-		var prompt string
-		switch m.imode {
-		case modeNewTask:
-			prompt = "New task: "
-		case modeConfirmDelete:
-			if len(m.entries) > 0 {
-				prompt = fmt.Sprintf("Delete %q? (y/n): ", m.entries[m.cursor].Task)
-			}
-		case modeEditNotes:
-			prompt = "Notes: "
+		// Task name — truncate and pad.
+		task := e.Task
+		if len(task) > taskW {
+			task = task[:taskW-1] + "…"
 		}
-		b.WriteString("\n  " + styleAmber.Render(prompt) + m.input.View() + "\n")
+
+		// Duration bar.
+		filled := int(float64(d) / float64(maxDur) * float64(barW))
+		if d > 0 && filled == 0 {
+			filled = 1
+		}
+		barPlain := strings.Repeat("█", filled) + strings.Repeat("░", barW-filled)
+		barStyled := styleGreen.Render(barPlain)
+
+		durStr := models.FormatDuration(d)
+		if len(durStr) > 9 {
+			durStr = durStr[:9]
+		}
+
+		if i == m.cursor {
+			// Selected: plain text row so styleSelected fills correctly.
+			rowPlain := fmt.Sprintf("%-2s%s  %-*s  [%s]  %-9s",
+				func() string {
+					if e.IsRunning() {
+						return "▶ "
+					}
+					return "  "
+				}(),
+				startStr, taskW, task, barPlain, durStr)
+			lines = append(lines, styleSelected.Width(contentW).Render(rowPlain))
+		} else {
+			// Styled: build with concatenation to avoid styleNormal wrapping ANSI.
+			row := " " + indicator + startStr + "  " +
+				styleMuted.Render(fmt.Sprintf("%-*s", taskW, task)) +
+				"  [" + barStyled + "]  " +
+				styleMuted.Render(durStr) + " "
+			lines = append(lines, row)
+		}
 	}
 
-	b.WriteString("\n")
-	footer := "  n start · s stop · d delete · e notes · j/k navigate · w week · v stats · q quit"
-	b.WriteString(styleFooter.Render(footer) + "\n")
+	lines = append(lines, styleDivider.Render(strings.Repeat("─", width-4)))
+	lines = append(lines, " "+styleBlue.Render("Total: "+models.FormatDuration(total))+" ")
 
-	return b.String()
+	return strings.Join(lines, "\n")
+}
+
+func (m model) renderInput() string {
+	var prompt string
+	switch m.imode {
+	case modeNewTask:
+		prompt = "New task: "
+	case modeConfirmDelete:
+		if len(m.entries) > 0 {
+			prompt = fmt.Sprintf("Delete %q? (y/n): ", m.entries[m.cursor].Task)
+		}
+	case modeEditNotes:
+		prompt = "Notes: "
+	}
+	return "  " + styleAmber.Render(prompt) + m.input.View()
 }
 
 func (m model) weekView() string {
