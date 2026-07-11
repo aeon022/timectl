@@ -2,6 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"math"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,12 +19,13 @@ import (
 
 var (
 	colorBlue   = lipgloss.AdaptiveColor{Light: "25", Dark: "33"}
+	colorCyan   = lipgloss.AdaptiveColor{Light: "30", Dark: "51"}
 	colorGreen  = lipgloss.AdaptiveColor{Light: "28", Dark: "42"}
 	colorRed    = lipgloss.AdaptiveColor{Light: "160", Dark: "203"}
 	colorAmber  = lipgloss.AdaptiveColor{Light: "214", Dark: "220"}
 	colorMuted  = lipgloss.AdaptiveColor{Light: "243", Dark: "246"}
 	colorSubtle = lipgloss.AdaptiveColor{Light: "250", Dark: "239"}
-	selectedBg  = lipgloss.AdaptiveColor{Light: "189", Dark: "17"}
+	selectedBg  = lipgloss.AdaptiveColor{Light: "159", Dark: "23"}
 	selectedFg  = lipgloss.AdaptiveColor{Light: "16", Dark: "255"}
 )
 
@@ -33,7 +37,7 @@ var (
 
 	styleRunning = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(colorGreen)
+			Foreground(colorCyan)
 
 	styleFooter = lipgloss.NewStyle().
 			Foreground(colorMuted)
@@ -67,8 +71,11 @@ var (
 
 	panelStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorMuted).
+			BorderForeground(colorBlue).
 			Padding(0, 1)
+
+	styleCyan = lipgloss.NewStyle().
+			Foreground(colorCyan)
 )
 
 // ── Views ────────────────────────────────────────────────────────────────────
@@ -85,6 +92,7 @@ const (
 
 type tickMsg time.Time
 type refreshMsg struct{}
+type dayEntriesMsg struct{ entries []models.Entry }
 type errMsg struct{ err error }
 type weekLoadedMsg struct{ summaries []models.DaySummary }
 type statsLoadedMsg struct{ text string }
@@ -129,15 +137,25 @@ type model struct {
 	heatData   []heatDay
 	heatLoaded bool
 	animStep   int
+
+	browseDate time.Time  // zero = today
+	goalHours  float64
 }
 
 func newModel(s *store.Store) model {
 	ti := textinput.New()
 	ti.CharLimit = 200
 	ti.Width = 50
+	goal := 8.0
+	if v := os.Getenv("TIMECTL_GOAL_HOURS"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			goal = f
+		}
+	}
 	return model{
-		store: s,
-		input: ti,
+		store:     s,
+		input:     ti,
+		goalHours: goal,
 	}
 }
 
@@ -194,7 +212,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tick()
 
 	case refreshMsg:
-		entries, err := m.store.Today()
+		var entries []models.Entry
+		var err error
+		if m.browseDate.IsZero() {
+			entries, err = m.store.Today()
+		} else {
+			from := m.browseDate.Truncate(24 * time.Hour)
+			to := from.Add(24 * time.Hour)
+			entries, err = m.store.Range(from, to)
+		}
 		if err != nil {
 			m.errMsg = err.Error()
 		} else {
@@ -203,6 +229,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		running, _ := m.store.Running()
 		m.running = running
+		if m.cursor >= len(m.entries) {
+			m.cursor = maxInt(0, len(m.entries)-1)
+		}
+		return m, nil
+
+	case dayEntriesMsg:
+		m.entries = msg.entries
 		if m.cursor >= len(m.entries) {
 			m.cursor = maxInt(0, len(m.entries)-1)
 		}
@@ -277,10 +310,57 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.current = viewStats
 		return m, m.cmdLoadStats()
 
+	case "left":
+		if m.current == viewMain {
+			if m.browseDate.IsZero() {
+				m.browseDate = time.Now().Truncate(24 * time.Hour)
+			}
+			m.browseDate = m.browseDate.AddDate(0, 0, -1)
+			return m, doRefresh(m.store)
+		}
+
+	case "t":
+		if m.current == viewMain && !m.browseDate.IsZero() {
+			m.browseDate = time.Time{}
+			return m, doRefresh(m.store)
+		}
+
+	case "right":
+		if m.current == viewMain && !m.browseDate.IsZero() {
+			next := m.browseDate.AddDate(0, 0, 1)
+			today := time.Now().Truncate(24 * time.Hour)
+			if next.Before(today) {
+				m.browseDate = next
+			} else {
+				m.browseDate = time.Time{} // back to today
+			}
+			return m, doRefresh(m.store)
+		}
+
+	case "c":
+		if m.current == viewMain && len(m.entries) > 0 {
+			e := m.entries[m.cursor]
+			val := e.Task
+			if e.Project != "" {
+				val = e.Task + "@" + e.Project
+			}
+			m.imode = modeNewTask
+			m.input.Placeholder = "Task  (or task@project)"
+			m.input.SetValue(val)
+			m.input.CursorEnd()
+			m.input.Focus()
+		}
+
+	case "r":
+		if m.current == viewMain && len(m.entries) > 0 {
+			e := m.entries[m.cursor]
+			return m, m.cmdStart(e.Task, e.Project)
+		}
+
 	case "n":
 		if m.current == viewMain {
 			m.imode = modeNewTask
-			m.input.Placeholder = "Task name..."
+			m.input.Placeholder = "Task  (or task@project)"
 			m.input.SetValue("")
 			m.input.Focus()
 		}
@@ -325,7 +405,8 @@ func (m model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch mode {
 		case modeNewTask:
 			if val != "" {
-				return m, m.cmdStart(val, "")
+				task, project := parseTaskInput(val)
+				return m, m.cmdStart(task, project)
 			}
 		case modeConfirmDelete:
 			if val == "y" && len(m.entries) > 0 {
@@ -344,6 +425,14 @@ func (m model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
+}
+
+// parseTaskInput splits "task@project" into task and project components.
+func parseTaskInput(s string) (task, project string) {
+	if idx := strings.LastIndex(s, "@"); idx > 0 {
+		return strings.TrimSpace(s[:idx]), strings.TrimSpace(s[idx+1:])
+	}
+	return s, ""
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────
@@ -451,7 +540,7 @@ func (m model) mainView() string {
 	case m.errMsg != "":
 		footer = styleRed.Render("Error: " + m.errMsg)
 	default:
-		footer = styleFooter.Render("n start · s stop · e notes · d delete · j/k · w week · v stats · q quit")
+		footer = styleFooter.Render("n start (task@proj) · c copy · r restart · s stop · e notes · d delete · j/k · ←/→/t day · w week · v stats · q")
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -500,7 +589,7 @@ func (m model) renderHeatmap() string {
 	lines = append(lines, "")
 	lines = append(lines, styleMuted.Render("today"))
 	if todayTotal > 0 {
-		lines = append(lines, styleGreen.Render(models.FormatDuration(todayTotal)))
+		lines = append(lines, styleCyan.Render(models.FormatDuration(todayTotal)))
 	} else {
 		lines = append(lines, styleMuted.Render("nothing yet"))
 	}
@@ -515,19 +604,25 @@ func heatCellHours(d time.Duration) string {
 	case h == 0:
 		return styleMuted.Render(b)
 	case h < 2:
-		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "71", Dark: "22"}).Render(b)
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "30", Dark: "23"}).Render(b)
 	case h < 4:
-		return styleGreen.Render(b)
+		return styleCyan.Render(b)
 	default:
-		return styleGreen.Bold(true).Render(b)
+		return styleCyan.Bold(true).Render(b)
 	}
 }
 
 func (m model) renderToday(width, height int) string {
 	var lines []string
 
-	// Header: running timer or idle.
-	if m.running != nil {
+	// Date header when browsing past days.
+	if !m.browseDate.IsZero() {
+		label := styleAmber.Render(m.browseDate.Format("Mon Jan 02"))
+		lines = append(lines, " "+label+styleMuted.Render("  ← prev · → next · t today")+" ")
+	}
+
+	// Header: running timer or idle (only relevant for today).
+	if m.running != nil && m.browseDate.IsZero() {
 		spins := [4]string{"⠋", "⠙", "⠹", "⠸"}
 		spin := spins[m.animStep%4]
 		elapsed := models.FormatDuration(m.running.ComputedDuration())
@@ -538,7 +633,7 @@ func (m model) renderToday(width, height int) string {
 		lines = append(lines,
 			styleRunning.Render(fmt.Sprintf("▶ %s%s", m.running.Task, proj))+
 				"  "+styleMuted.Render(elapsed)+"  "+styleAmber.Render(spin))
-	} else {
+	} else if m.browseDate.IsZero() {
 		lines = append(lines, styleMuted.Render("No timer running"))
 	}
 	lines = append(lines, styleDivider.Render(strings.Repeat("─", width-4)))
@@ -597,7 +692,7 @@ func (m model) renderToday(width, height int) string {
 			filled = 1
 		}
 		barPlain := strings.Repeat("█", filled) + strings.Repeat("░", barW-filled)
-		barStyled := styleGreen.Render(barPlain)
+		barStyled := styleCyan.Render(barPlain)
 
 		durStr := models.FormatDuration(d)
 		if len(durStr) > 9 {
@@ -627,6 +722,18 @@ func (m model) renderToday(width, height int) string {
 
 	lines = append(lines, styleDivider.Render(strings.Repeat("─", width-4)))
 	lines = append(lines, " "+styleBlue.Render("Total: "+models.FormatDuration(total))+" ")
+
+	if m.goalHours > 0 && m.browseDate.IsZero() {
+		const goalBarW = 20
+		pct := math.Min(1.0, total.Hours()/m.goalHours)
+		filled := int(pct * goalBarW)
+		bar := strings.Repeat("█", filled) + strings.Repeat("░", goalBarW-filled)
+		goalTotal := time.Duration(m.goalHours * float64(time.Hour))
+		goalLine := " " + styleMuted.Render("goal  [") + styleCyan.Render(bar) +
+			styleMuted.Render("]  ") + styleCyan.Render(models.FormatDuration(total)) +
+			styleMuted.Render(" / "+models.FormatDuration(goalTotal)) + " "
+		lines = append(lines, goalLine)
+	}
 
 	return strings.Join(lines, "\n")
 }
@@ -681,7 +788,7 @@ func (m model) weekView() string {
 
 			line := fmt.Sprintf("  %s  %s  %s",
 				label,
-				lipgloss.NewStyle().Foreground(colorGreen).Render(bar),
+				styleCyan.Render(bar),
 				styleBlue.Render(dur),
 			)
 			b.WriteString(line + "\n")
