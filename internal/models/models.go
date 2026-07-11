@@ -7,13 +7,14 @@ import (
 
 // Entry represents a single time-tracking record.
 type Entry struct {
-	ID        int64
-	Task      string
-	Project   string
-	StartedAt time.Time
-	StoppedAt *time.Time
-	Duration  time.Duration
-	Notes     string
+	ID         int64
+	Task       string
+	Project    string
+	StartedAt  time.Time
+	StoppedAt  *time.Time
+	Duration   time.Duration
+	Notes      string
+	LinkedTask string
 }
 
 // IsRunning reports whether this entry has no stop time.

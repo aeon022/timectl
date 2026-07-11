@@ -86,6 +86,7 @@ const (
 	viewMain viewKind = iota
 	viewWeek
 	viewStats
+	viewTaskPick
 )
 
 // ── Messages ─────────────────────────────────────────────────────────────────
@@ -97,6 +98,7 @@ type errMsg struct{ err error }
 type weekLoadedMsg struct{ summaries []models.DaySummary }
 type statsLoadedMsg struct{ text string }
 type heatLoadedMsg struct{ data []heatDay }
+type taskPickMsg struct{ tasks []string }
 
 // ── Heat data ─────────────────────────────────────────────────────────────────
 
@@ -138,8 +140,12 @@ type model struct {
 	heatLoaded bool
 	animStep   int
 
-	browseDate time.Time  // zero = today
+	browseDate time.Time // zero = today
 	goalHours  float64
+	hourlyRate float64
+
+	taskList   []string
+	taskCursor int
 }
 
 func newModel(s *store.Store) model {
@@ -152,10 +158,17 @@ func newModel(s *store.Store) model {
 			goal = f
 		}
 	}
+	var hourlyRate float64
+	if v := os.Getenv("TIMECTL_HOURLY_RATE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			hourlyRate = f
+		}
+	}
 	return model{
-		store:     s,
-		input:     ti,
-		goalHours: goal,
+		store:      s,
+		input:      ti,
+		goalHours:  goal,
+		hourlyRate: hourlyRate,
 	}
 }
 
@@ -254,6 +267,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statsText = msg.text
 		return m, nil
 
+	case taskPickMsg:
+		m.taskList = msg.tasks
+		m.taskCursor = 0
+		return m, nil
+
 	case errMsg:
 		m.errMsg = msg.err.Error()
 		return m, nil
@@ -276,6 +294,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleNavKey handles keys when not in input mode.
 func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Task picker gets its own key handling.
+	if m.current == viewTaskPick {
+		return m.handleTaskPickKey(msg)
+	}
+
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -383,8 +406,40 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.SetValue(m.entries[m.cursor].Notes)
 			m.input.Focus()
 		}
+
+	case "T":
+		m.current = viewTaskPick
+		m.taskList = nil
+		m.taskCursor = 0
+		return m, m.cmdLoadTasks()
 	}
 
+	return m, nil
+}
+
+// handleTaskPickKey handles keys in the task picker view.
+func (m model) handleTaskPickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q":
+		m.current = viewMain
+		return m, nil
+	case "j", "down":
+		if m.taskCursor < len(m.taskList)-1 {
+			m.taskCursor++
+		}
+	case "k", "up":
+		if m.taskCursor > 0 {
+			m.taskCursor--
+		}
+	case "enter":
+		if len(m.taskList) > 0 {
+			task := m.taskList[m.taskCursor]
+			m.current = viewMain
+			return m, m.cmdStartLinked(task, "", task)
+		}
+	}
 	return m, nil
 }
 
@@ -492,12 +547,32 @@ func (m model) cmdLoadWeek() tea.Cmd {
 
 func (m model) cmdLoadStats() tea.Cmd {
 	s := m.store
+	rate := m.hourlyRate
 	return func() tea.Msg {
-		text, err := buildStatsText(s)
+		text, err := buildStatsText(s, rate)
 		if err != nil {
 			return errMsg{err}
 		}
 		return statsLoadedMsg{text}
+	}
+}
+
+func (m model) cmdLoadTasks() tea.Cmd {
+	s := m.store
+	return func() tea.Msg {
+		tasks, _ := s.OpenTasks()
+		return taskPickMsg{tasks: tasks}
+	}
+}
+
+func (m model) cmdStartLinked(task, project, linkedTask string) tea.Cmd {
+	s := m.store
+	return func() tea.Msg {
+		_, err := s.StartLinked(task, project, linkedTask)
+		if err != nil {
+			return errMsg{err}
+		}
+		return refreshMsg{}
 	}
 }
 
@@ -509,6 +584,8 @@ func (m model) View() string {
 		return m.weekView()
 	case viewStats:
 		return m.statsView()
+	case viewTaskPick:
+		return m.taskPickView()
 	default:
 		return m.mainView()
 	}
@@ -540,7 +617,7 @@ func (m model) mainView() string {
 	case m.errMsg != "":
 		footer = styleRed.Render("Error: " + m.errMsg)
 	default:
-		footer = styleFooter.Render("n start (task@proj) · c copy · r restart · s stop · e notes · d delete · j/k · ←/→/t day · w week · v stats · q")
+		footer = styleFooter.Render("n start (task@proj) · T task picker · c copy · r restart · s stop · e notes · d delete · j/k · ←/→/t day · w week · v stats · q")
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -680,11 +757,15 @@ func (m model) renderToday(width, height int) string {
 		// Start time.
 		startStr := e.StartedAt.Format("15:04")
 
-		// Task name — truncate and pad.
-		task := e.Task
-		if len(task) > taskW {
-			task = task[:taskW-1] + "…"
+		// Task name — truncate and pad; append linked task indicator if present.
+		taskDisplay := e.Task
+		if e.LinkedTask != "" {
+			taskDisplay = e.Task + " → " + e.LinkedTask
 		}
+		if len(taskDisplay) > taskW {
+			taskDisplay = taskDisplay[:taskW-1] + "…"
+		}
+		task := taskDisplay
 
 		// Duration bar.
 		filled := int(float64(d) / float64(maxDur) * float64(barW))
@@ -814,9 +895,31 @@ func (m model) statsView() string {
 	return b.String()
 }
 
+func (m model) taskPickView() string {
+	var b strings.Builder
+	b.WriteString(styleHeader.Render("timectl — open tasks") + "\n\n")
+
+	if m.taskList == nil {
+		b.WriteString(styleMuted.Render("  Loading...") + "\n")
+	} else if len(m.taskList) == 0 {
+		b.WriteString(styleMuted.Render("  No open tasks found in taskctl.") + "\n")
+	} else {
+		for i, title := range m.taskList {
+			if i == m.taskCursor {
+				b.WriteString(styleSelected.Render("  "+title) + "\n")
+			} else {
+				b.WriteString("  " + styleMuted.Render(title) + "\n")
+			}
+		}
+	}
+
+	b.WriteString("\n" + styleFooter.Render("  j/k navigate · enter start timer · esc/q back") + "\n")
+	return b.String()
+}
+
 // ── Stats builder ─────────────────────────────────────────────────────────────
 
-func buildStatsText(s *store.Store) (string, error) {
+func buildStatsText(s *store.Store, hourlyRate float64) (string, error) {
 	entries, err := s.RecentDays(14)
 	if err != nil {
 		return "", err
@@ -868,6 +971,12 @@ func buildStatsText(s *store.Store) (string, error) {
 	streak := computeStreak(daySet)
 	sb.WriteString("\n" + styleAmber.Render("  Current streak:") + "\n")
 	sb.WriteString(fmt.Sprintf("  %d day(s)\n", streak))
+
+	if hourlyRate > 0 {
+		earnings := totalDur.Hours() * hourlyRate
+		sb.WriteString("\n" + styleAmber.Render("  Earnings (last 14 days):") + "\n")
+		sb.WriteString(fmt.Sprintf("  at $%.0f/h: $%.2f\n", hourlyRate, earnings))
+	}
 
 	return sb.String(), nil
 }

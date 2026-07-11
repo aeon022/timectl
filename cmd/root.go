@@ -44,6 +44,7 @@ func init() {
 		logCmd,
 		deleteCmd,
 		mcpCmd,
+		invoiceCmd,
 	)
 }
 
