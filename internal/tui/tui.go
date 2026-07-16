@@ -87,6 +87,7 @@ const (
 	viewWeek
 	viewStats
 	viewTaskPick
+	viewHelp
 )
 
 // ── Messages ─────────────────────────────────────────────────────────────────
@@ -116,6 +117,7 @@ const (
 	modeNewTask
 	modeConfirmDelete
 	modeEditNotes
+	modeFilter
 )
 
 // ── model ────────────────────────────────────────────────────────────────────
@@ -126,12 +128,14 @@ type model struct {
 	height  int
 	current viewKind
 
-	entries  []models.Entry
-	running  *models.Entry
-	cursor   int
-	imode    inputMode
-	input    textinput.Model
-	errMsg   string
+	entries    []models.Entry // filtered view of allEntries
+	allEntries []models.Entry
+	filterQ    string
+	running    *models.Entry
+	cursor     int
+	imode      inputMode
+	input      textinput.Model
+	errMsg     string
 
 	weekSummaries []models.DaySummary
 	statsText     string
@@ -237,7 +241,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if err != nil {
 			m.errMsg = err.Error()
 		} else {
-			m.entries = entries
+			m.allEntries = entries
+			m.entries = filterEntries(entries, m.filterQ)
 			m.errMsg = ""
 		}
 		running, _ := m.store.Running()
@@ -248,7 +253,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case dayEntriesMsg:
-		m.entries = msg.entries
+		m.allEntries = msg.entries
+		m.entries = filterEntries(msg.entries, m.filterQ)
 		if m.cursor >= len(m.entries) {
 			m.cursor = maxInt(0, len(m.entries)-1)
 		}
@@ -299,6 +305,17 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleTaskPickKey(msg)
 	}
 
+	// Help overlay: any close key returns to main.
+	if m.current == viewHelp {
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "q", "esc", "?":
+			m.current = viewMain
+		}
+		return m, nil
+	}
+
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -313,6 +330,10 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		if m.current != viewMain {
 			m.current = viewMain
+		} else if m.filterQ != "" {
+			m.filterQ = ""
+			m.entries = filterEntries(m.allEntries, "")
+			m.cursor = 0
 		}
 
 	case "j", "down":
@@ -412,6 +433,18 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.taskList = nil
 		m.taskCursor = 0
 		return m, m.cmdLoadTasks()
+
+	case "/":
+		if m.current == viewMain {
+			m.imode = modeFilter
+			m.input.Placeholder = "filter by task, project, notes…"
+			m.input.SetValue(m.filterQ)
+			m.input.CursorEnd()
+			m.input.Focus()
+		}
+
+	case "?":
+		m.current = viewHelp
 	}
 
 	return m, nil
@@ -445,6 +478,29 @@ func (m model) handleTaskPickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleInputKey handles keys while in an input prompt.
 func (m model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Filter mode filters live while typing.
+	if m.imode == modeFilter {
+		switch msg.String() {
+		case "esc":
+			m.imode = modeNone
+			m.input.Blur()
+			m.filterQ = ""
+			m.entries = filterEntries(m.allEntries, "")
+			m.cursor = 0
+			return m, nil
+		case "enter":
+			m.imode = modeNone
+			m.input.Blur()
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.filterQ = strings.TrimSpace(m.input.Value())
+		m.entries = filterEntries(m.allEntries, m.filterQ)
+		m.cursor = 0
+		return m, cmd
+	}
+
 	switch msg.String() {
 	case "esc":
 		m.imode = modeNone
@@ -488,6 +544,23 @@ func parseTaskInput(s string) (task, project string) {
 		return strings.TrimSpace(s[:idx]), strings.TrimSpace(s[idx+1:])
 	}
 	return s, ""
+}
+
+// filterEntries returns entries matching q in task, project, or notes.
+func filterEntries(entries []models.Entry, q string) []models.Entry {
+	q = strings.ToLower(strings.TrimSpace(q))
+	if q == "" {
+		return entries
+	}
+	var out []models.Entry
+	for _, e := range entries {
+		if strings.Contains(strings.ToLower(e.Task), q) ||
+			strings.Contains(strings.ToLower(e.Project), q) ||
+			strings.Contains(strings.ToLower(e.Notes), q) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────
@@ -586,6 +659,8 @@ func (m model) View() string {
 		return m.statsView()
 	case viewTaskPick:
 		return m.taskPickView()
+	case viewHelp:
+		return m.helpView()
 	default:
 		return m.mainView()
 	}
@@ -616,8 +691,10 @@ func (m model) mainView() string {
 		footer = m.renderInput()
 	case m.errMsg != "":
 		footer = styleRed.Render("Error: " + m.errMsg)
+	case m.filterQ != "":
+		footer = styleAmber.Render("filter: /"+m.filterQ) + styleFooter.Render("  ·  esc clear · ? help")
 	default:
-		footer = styleFooter.Render("n start (task@proj) · T task picker · c copy · r restart · s stop · e notes · d delete · j/k · ←/→/t day · w week · v stats · q")
+		footer = styleFooter.Render("n start · T tasks · s stop · e notes · d delete · / filter · ←/→/t day · w week · v stats · ? help · q")
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -830,6 +907,8 @@ func (m model) renderInput() string {
 		}
 	case modeEditNotes:
 		prompt = "Notes: "
+	case modeFilter:
+		prompt = "/ "
 	}
 	return "  " + styleAmber.Render(prompt) + m.input.View()
 }
@@ -915,6 +994,36 @@ func (m model) taskPickView() string {
 
 	b.WriteString("\n" + styleFooter.Render("  j/k navigate · enter start timer · esc/q back") + "\n")
 	return b.String()
+}
+
+func (m model) helpView() string {
+	row := func(k, desc string) string {
+		return "  " + styleBlue.Render(fmt.Sprintf("%-10s", k)) + styleMuted.Render(desc) + "\n"
+	}
+	section := func(t string) string { return "\n  " + styleAmber.Render(t) + "\n" }
+
+	var b strings.Builder
+	b.WriteString(styleHeader.Render("timectl") + styleMuted.Render(" — time tracking from the terminal") + "\n")
+	b.WriteString(section("Timer"))
+	b.WriteString(row("n", "start new timer (task@project)"))
+	b.WriteString(row("T", "task picker — start timer from open taskctl task"))
+	b.WriteString(row("s", "stop running timer"))
+	b.WriteString(row("r", "restart selected entry's task"))
+	b.WriteString(row("c", "copy selected entry into new-task input"))
+	b.WriteString(section("Entries"))
+	b.WriteString(row("j / k", "move selection"))
+	b.WriteString(row("e", "edit notes"))
+	b.WriteString(row("d", "delete entry (asks to confirm)"))
+	b.WriteString(row("/", "filter by task, project, notes (esc clears)"))
+	b.WriteString(section("Views"))
+	b.WriteString(row("← / →", "browse previous / next day"))
+	b.WriteString(row("t", "back to today"))
+	b.WriteString(row("w", "week breakdown"))
+	b.WriteString(row("v", "stats (top tasks, streak, earnings)"))
+	b.WriteString(section("Other"))
+	b.WriteString(row("?", "toggle this help"))
+	b.WriteString(row("q", "quit / back"))
+	return panelStyle.Render(b.String())
 }
 
 // ── Stats builder ─────────────────────────────────────────────────────────────
