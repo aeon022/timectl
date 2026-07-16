@@ -43,6 +43,7 @@ brews:
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
     homepage: https://github.com/aeon022/timectl
+    license: MIT
     description: "Terminal time tracker - start/stop timers, weekly breakdown, MCP server"
     install: |
       bin.install "timectl"
