@@ -24,7 +24,7 @@ var (
 	colorRed    = lipgloss.AdaptiveColor{Light: "160", Dark: "203"}
 	colorAmber  = lipgloss.AdaptiveColor{Light: "214", Dark: "220"}
 	colorMuted  = lipgloss.AdaptiveColor{Light: "243", Dark: "246"}
-	colorSubtle = lipgloss.AdaptiveColor{Light: "250", Dark: "239"}
+	colorSubtle = lipgloss.AdaptiveColor{Light: "250", Dark: "244"}
 	selectedBg  = lipgloss.AdaptiveColor{Light: "159", Dark: "23"}
 	selectedFg  = lipgloss.AdaptiveColor{Light: "16", Dark: "255"}
 )
