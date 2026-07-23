@@ -8,10 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aeon022/missionctl-core/overlay"
 	"github.com/aeon022/missionctl-core/theme"
 	"github.com/aeon022/timectl/internal/models"
 	"github.com/aeon022/timectl/internal/store"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -154,6 +156,16 @@ type model struct {
 
 	taskList   []string
 	taskCursor int
+
+	// "?" transient help popup — reachable from viewMain, viewWeek, and
+	// viewStats (not just the main view, unlike the other tools this
+	// pattern was rolled out to first), so the view it was opened from
+	// must be remembered to pick the right background and to return to
+	// the right place on close instead of always dumping back to viewMain.
+	helpReturnTo viewKind
+	helpVP       viewport.Model
+	helpPopW     int
+	helpPopH     int
 }
 
 func newModel(s *store.Store) model {
@@ -309,15 +321,18 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleTaskPickKey(msg)
 	}
 
-	// Help overlay: any close key returns to main.
+	// Help overlay: close keys return to whichever view it was opened from.
 	if m.current == viewHelp {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "q", "esc", "?":
-			m.current = viewMain
+			m.current = m.helpReturnTo
+			return m, nil
 		}
-		return m, nil
+		var cmd tea.Cmd
+		m.helpVP, cmd = m.helpVP.Update(msg)
+		return m, cmd
 	}
 
 	switch msg.String() {
@@ -448,7 +463,7 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "?":
-		m.current = viewHelp
+		m = m.openHelp()
 	}
 
 	return m, nil
@@ -664,7 +679,8 @@ func (m model) View() string {
 	case viewTaskPick:
 		return m.taskPickView()
 	case viewHelp:
-		return m.helpView()
+		// inset 0: no enclosing border around the background views here.
+		return overlay.Center(m.backgroundView(), m.renderHelpPopup(), m.width, m.height, 0)
 	default:
 		return m.mainView()
 	}
@@ -1000,14 +1016,13 @@ func (m model) taskPickView() string {
 	return b.String()
 }
 
-func (m model) helpView() string {
+func (m model) helpContent() string {
 	row := func(k, desc string) string {
 		return "  " + styleBlue.Render(fmt.Sprintf("%-10s", k)) + styleMuted.Render(desc) + "\n"
 	}
 	section := func(t string) string { return "\n  " + styleAmber.Render(t) + "\n" }
 
 	var b strings.Builder
-	b.WriteString(styleHeader.Render("timectl") + styleMuted.Render(" — time tracking from the terminal") + "\n")
 	b.WriteString(section("Timer"))
 	b.WriteString(row("n", "start new timer (task@project)"))
 	b.WriteString(row("T", "task picker — start timer from open taskctl task"))
@@ -1027,7 +1042,62 @@ func (m model) helpView() string {
 	b.WriteString(section("Other"))
 	b.WriteString(row("?", "toggle this help"))
 	b.WriteString(row("q", "quit / back"))
-	return panelStyle.Render(b.String())
+	return b.String()
+}
+
+// backgroundView renders whichever view help was opened from (help is
+// reachable from more than just the main view here), so the overlay's
+// background matches what was actually on screen.
+func (m model) backgroundView() string {
+	switch m.helpReturnTo {
+	case viewWeek:
+		return m.weekView()
+	case viewStats:
+		return m.statsView()
+	default:
+		return m.mainView()
+	}
+}
+
+// openHelp sizes and populates the transient help popup (see
+// renderHelpPopup/overlay.Center) from the ACTUAL rendered background
+// height, not the terminal size.
+func (m model) openHelp() model {
+	m.helpReturnTo = m.current
+	bgLines := strings.Split(m.backgroundView(), "\n")
+
+	safeH := max(6, len(bgLines))
+	popH := min(safeH, 22)
+	popW := min(70, m.width)
+	if popW < 40 {
+		popW = 40
+	}
+
+	vp := viewport.New(popW-6, popH-5) // border 1+1, padding(1,2) → 2 rows/4 cols; -1 row for footer
+	vp.SetContent(m.helpContent())
+
+	m.helpVP = vp
+	m.helpPopW = popW
+	m.helpPopH = popH
+	m.current = viewHelp
+	return m
+}
+
+// renderHelpPopup renders the help viewport in a bordered box, meant to be
+// composited over the background view via overlay.Center rather than
+// replacing the whole screen.
+func (m model) renderHelpPopup() string {
+	footer := "esc / ?  close"
+	if m.helpVP.TotalLineCount() > m.helpVP.Height {
+		footer = fmt.Sprintf("j/k scroll (%d%%)  ·  %s", int(m.helpVP.ScrollPercent()*100), footer)
+	}
+	body := m.helpVP.View() + "\n" + styleMuted.Render(footer)
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorBlue).
+		Padding(1, 2).
+		Width(m.helpPopW).
+		Render(body)
 }
 
 // ── Stats builder ─────────────────────────────────────────────────────────────
