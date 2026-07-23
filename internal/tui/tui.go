@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aeon022/missionctl-core/theme"
 	"github.com/aeon022/timectl/internal/models"
 	"github.com/aeon022/timectl/internal/store"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -18,15 +19,18 @@ import (
 // ── Design tokens ────────────────────────────────────────────────────────────
 
 var (
-	colorBlue   = lipgloss.AdaptiveColor{Light: "25", Dark: "33"}
+	// Shared across the suite via missionctl-core/theme.
+	colorBlue   = theme.Blue
 	colorCyan   = lipgloss.AdaptiveColor{Light: "30", Dark: "51"}
-	colorGreen  = lipgloss.AdaptiveColor{Light: "28", Dark: "42"}
-	colorRed    = lipgloss.AdaptiveColor{Light: "160", Dark: "203"}
-	colorAmber  = lipgloss.AdaptiveColor{Light: "214", Dark: "220"}
-	colorMuted  = lipgloss.AdaptiveColor{Light: "243", Dark: "246"}
-	colorSubtle = lipgloss.AdaptiveColor{Light: "250", Dark: "244"}
-	selectedBg  = lipgloss.AdaptiveColor{Light: "159", Dark: "23"}
-	selectedFg  = lipgloss.AdaptiveColor{Light: "16", Dark: "255"}
+	colorGreen  = theme.Green
+	colorRed    = theme.Red
+	colorAmber  = theme.Amber
+	colorMuted  = theme.Muted
+	colorSubtle = theme.Subtle
+	// selectedBg/selectedFg intentionally NOT shared — timectl's selected-row
+	// color is a deliberately different shade from the suite default.
+	selectedBg = lipgloss.AdaptiveColor{Light: "159", Dark: "23"}
+	selectedFg = lipgloss.AdaptiveColor{Light: "16", Dark: "255"}
 )
 
 var (
