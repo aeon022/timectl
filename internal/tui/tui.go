@@ -698,7 +698,7 @@ func (m model) mainView() string {
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
-		styleHeader.Render("timectl"),
+		styleHeader.Render("timectl — today"),
 		panels,
 		footer,
 	)
