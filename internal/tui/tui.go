@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/sahilm/fuzzy"
 )
 
 // ── Design tokens ────────────────────────────────────────────────────────────
@@ -565,21 +566,96 @@ func parseTaskInput(s string) (task, project string) {
 	return s, ""
 }
 
-// filterEntries returns entries matching q in task, project, or notes.
+// filterEntries fuzzy-matches q against entry task names (ranked
+// best-match-first, like fzf/k9s), falling back to a plain substring match
+// on project/notes for entries the task fuzzy-match missed — someone might
+// search by project or a note fragment rather than the task name itself.
 func filterEntries(entries []models.Entry, q string) []models.Entry {
-	q = strings.ToLower(strings.TrimSpace(q))
+	q = strings.TrimSpace(q)
 	if q == "" {
 		return entries
 	}
-	var out []models.Entry
-	for _, e := range entries {
-		if strings.Contains(strings.ToLower(e.Task), q) ||
-			strings.Contains(strings.ToLower(e.Project), q) ||
-			strings.Contains(strings.ToLower(e.Notes), q) {
+
+	tasks := make([]string, len(entries))
+	for i, e := range entries {
+		tasks[i] = e.Task
+	}
+	matches := fuzzy.Find(q, tasks)
+
+	out := make([]models.Entry, 0, len(matches))
+	matched := make(map[int]bool, len(matches))
+	for _, mt := range matches {
+		out = append(out, entries[mt.Index])
+		matched[mt.Index] = true
+	}
+
+	ql := strings.ToLower(q)
+	for i, e := range entries {
+		if matched[i] {
+			continue
+		}
+		if strings.Contains(strings.ToLower(e.Project), ql) || strings.Contains(strings.ToLower(e.Notes), ql) {
 			out = append(out, e)
 		}
 	}
 	return out
+}
+
+// fuzzyMatchIndexes returns the rune indexes within s that q fuzzy-matched,
+// or nil if q is empty or doesn't match at all.
+func fuzzyMatchIndexes(q, s string) []int {
+	if q == "" {
+		return nil
+	}
+	matches := fuzzy.Find(q, []string{s})
+	if len(matches) == 0 {
+		return nil
+	}
+	return matches[0].MatchedIndexes
+}
+
+// highlightMatches renders s with the rune positions in idxs (from
+// fuzzyMatchIndexes) styled via a warm, underlined variant of base, and
+// every other character via base itself — fzf-style match highlighting.
+//
+// Renders one character at a time rather than nesting a highlighted span
+// inside a single outer Render() call: lipgloss's Render() ends every
+// string with a full SGR reset, so an inner Render() call's reset would
+// wipe out the outer style for everything after the first highlighted
+// character. Per-character rendering keeps every segment self-contained.
+//
+// idxs are indexes into s BEFORE any truncation — callers must resolve
+// indexes against the same, untruncated string used to compute them.
+func highlightMatches(s string, idxs []int, base lipgloss.Style) string {
+	if len(idxs) == 0 {
+		return base.Render(s)
+	}
+	hi := base.Foreground(colorAmber).Underline(true)
+	matchSet := make(map[int]bool, len(idxs))
+	for _, i := range idxs {
+		matchSet[i] = true
+	}
+	var b strings.Builder
+	for i, r := range []rune(s) {
+		if matchSet[i] {
+			b.WriteString(hi.Render(string(r)))
+		} else {
+			b.WriteString(base.Render(string(r)))
+		}
+	}
+	return b.String()
+}
+
+// truncate shortens s to at most n runes, appending "…" if it had to cut.
+func truncate(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	if n <= 1 {
+		return "…"
+	}
+	return string(runes[:n-1]) + "…"
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────
@@ -828,13 +904,21 @@ func (m model) renderToday(width, height int) string {
 		maxDur = time.Second
 	}
 
-	// Row layout (manual 1-space padding on each side):
+	// Row layout (manual 1-space padding on each side). rowPlain's width
+	// must land on contentW-2, not contentW: it gets fed through
+	// styleSelected.Width(contentW).Render(...) for the cursor row, and
+	// styleSelected also carries Padding(0, 1) — 2 columns reserved INSIDE
+	// that Width() budget for its own padding. Undercounting either the
+	// literal separators in the "%-2s%s  %-*s  [%s]  %-9s" format string
+	// below, or this padding, makes rowPlain wider than the space actually
+	// left for content, and lipgloss word-wraps the overflow onto a second
+	// line. Found while adding fuzzy-search highlighting to this same row,
+	// verified with a forced-ANSI render (not visible in plain-text output).
 	// contentW = width - 2
-	// fixed = indicator(2) + time(5) + sep(2) + [bar](14) + sep(2) + dur(9) = 34
-	// taskW = contentW - 34
+	// fixed = indicator(2) + time(5) + sep(2) + "  ["(3) + bar(12) + "]  "(3) + dur(9) + padding(2) = 38
 	contentW := width - 2
 	barW := 12
-	fixed := 2 + 5 + 2 + barW + 2 + 2 + 9
+	fixed := 2 /*indicator*/ + 5 /*time*/ + 2 /*sep*/ + 3 /*"  ["*/ + barW + 3 /*"]  "*/ + 9 /*dur*/ + 2 /*styleSelected Padding(0,1)*/
 	taskW := contentW - fixed
 	if taskW < 6 {
 		taskW = 6
@@ -859,10 +943,8 @@ func (m model) renderToday(width, height int) string {
 		if e.LinkedTask != "" {
 			taskDisplay = e.Task + " → " + e.LinkedTask
 		}
-		if len(taskDisplay) > taskW {
-			taskDisplay = taskDisplay[:taskW-1] + "…"
-		}
-		task := taskDisplay
+		matchIdx := fuzzyMatchIndexes(m.filterQ, taskDisplay)
+		task := truncate(taskDisplay, taskW)
 
 		// Duration bar.
 		filled := int(float64(d) / float64(maxDur) * float64(barW))
@@ -890,8 +972,13 @@ func (m model) renderToday(width, height int) string {
 			lines = append(lines, styleSelected.Width(contentW).Render(rowPlain))
 		} else {
 			// Styled: build with concatenation to avoid styleNormal wrapping ANSI.
+			// Highlight first (per-character, self-contained ANSI), THEN pad
+			// via a plain (colorless) Width() — padding the already-styled
+			// string with fmt's "%-*s" would count escape bytes as width and
+			// misalign the column.
+			taskCol := lipgloss.NewStyle().Width(taskW).Render(highlightMatches(task, matchIdx, styleMuted))
 			row := " " + indicator + startStr + "  " +
-				styleMuted.Render(fmt.Sprintf("%-*s", taskW, task)) +
+				taskCol +
 				"  [" + barStyled + "]  " +
 				styleMuted.Render(durStr) + " "
 			lines = append(lines, row)
