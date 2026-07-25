@@ -299,6 +299,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.errMsg = msg.err.Error()
 		return m, nil
 
+	case tea.MouseMsg:
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			if m.current == viewMain && m.cursor > 0 {
+				m.cursor--
+			}
+		case tea.MouseButtonWheelDown:
+			if m.current == viewMain && m.cursor < len(m.entries)-1 {
+				m.cursor++
+			}
+		case tea.MouseButtonLeft:
+			if msg.Action != tea.MouseActionPress || m.current != viewMain {
+				return m, nil
+			}
+			if i := m.rowHitTest(msg.X, msg.Y); i >= 0 {
+				m.cursor = i
+			}
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.imode != modeNone {
 			return m.handleInputKey(msg)
@@ -762,6 +782,11 @@ func (m model) View() string {
 	}
 }
 
+// heatmapPanelW is the heatmap (left) panel's fixed outer width — shared
+// with rowHitTest so the entry list's screen X-offset can't drift from
+// what mainView actually renders.
+const heatmapPanelW = 30
+
 func (m model) mainView() string {
 	w, h := m.width, m.height
 	if w < 40 {
@@ -771,7 +796,7 @@ func (m model) mainView() string {
 		h = 24
 	}
 
-	heatW := 30
+	heatW := heatmapPanelW
 	rightW := w - heatW - 6
 	if rightW < 20 {
 		rightW = 20
@@ -798,6 +823,24 @@ func (m model) mainView() string {
 		panels,
 		footer,
 	)
+}
+
+// rowHitTest returns the m.entries index at screen position (x, y), or -1
+// if the click missed. Entries have no scroll window (renderToday appends
+// every entry unconditionally) and no section headers, so the mapping is
+// just a fixed offset: header line(1) + today panel's top border(1) +
+// renderToday's own 2-line preamble (idle/running or date-browse line,
+// then a divider — always exactly 2 lines either way) = row 4. x must
+// land inside the today (right) panel, past the heatmap panel + gap.
+func (m model) rowHitTest(x, y int) int {
+	if x < heatmapPanelW+2 {
+		return -1
+	}
+	idx := y - 4
+	if idx < 0 || idx >= len(m.entries) {
+		return -1
+	}
+	return idx
 }
 
 func (m model) renderHeatmap() string {
