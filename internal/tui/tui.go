@@ -140,6 +140,7 @@ type model struct {
 	filterQ    string
 	running    *models.Entry
 	cursor     int
+	hoverRow   int // m.entries index under the mouse cursor, -1 when none
 	imode      inputMode
 	input      textinput.Model
 	errMsg     string
@@ -190,6 +191,7 @@ func newModel(s *store.Store) model {
 		input:      ti,
 		goalHours:  goal,
 		hourlyRate: hourlyRate,
+		hoverRow:   -1,
 	}
 }
 
@@ -315,6 +317,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if i := m.rowHitTest(msg.X, msg.Y); i >= 0 {
 				m.cursor = i
+			}
+		case tea.MouseButtonNone:
+			if msg.Action == tea.MouseActionMotion && m.current == viewMain {
+				m.hoverRow = m.rowHitTest(msg.X, msg.Y)
 			}
 		}
 		return m, nil
@@ -1002,8 +1008,11 @@ func (m model) renderToday(width, height int) string {
 			durStr = durStr[:9]
 		}
 
-		if i == m.cursor {
-			// Selected: plain text row so styleSelected fills correctly.
+		switch {
+		case i == m.cursor, i == m.hoverRow:
+			// Selected/hovered: plain text row so styleSelected/theme.Hover
+			// fills correctly (see the comment further down about not
+			// nesting already-styled text inside a wrapping Render call).
 			rowPlain := fmt.Sprintf("%-2s%s  %-*s  [%s]  %-9s",
 				func() string {
 					if e.IsRunning() {
@@ -1012,8 +1021,12 @@ func (m model) renderToday(width, height int) string {
 					return "  "
 				}(),
 				startStr, taskW, task, barPlain, durStr)
-			lines = append(lines, styleSelected.Width(contentW).Render(rowPlain))
-		} else {
+			if i == m.cursor {
+				lines = append(lines, styleSelected.Width(contentW).Render(rowPlain))
+			} else {
+				lines = append(lines, theme.Hover.Width(contentW).Render(rowPlain))
+			}
+		default:
 			// Styled: build with concatenation to avoid styleNormal wrapping ANSI.
 			// Highlight first (per-character, self-contained ANSI), THEN pad
 			// via a plain (colorless) Width() — padding the already-styled
@@ -1339,7 +1352,7 @@ func Run(s *store.Store) error {
 	p := tea.NewProgram(
 		m,
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
+		tea.WithMouseAllMotion(),
 	)
 	_, err := p.Run()
 	return err
