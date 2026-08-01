@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -144,6 +145,7 @@ type model struct {
 	imode      inputMode
 	input      textinput.Model
 	errMsg     string
+	statusMsg  string // confirmation text (e.g. "Copied to clipboard") — persists until overwritten, same convention errMsg follows
 
 	weekSummaries []models.DaySummary
 	statsText     string
@@ -472,6 +474,12 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.Placeholder = "y to confirm, n to cancel"
 			m.input.SetValue("")
 			m.input.Focus()
+		}
+
+	case "y":
+		if m.current == viewMain && len(m.entries) > 0 {
+			m.statusMsg = "Copied to clipboard"
+			return m, copyToClipboardCmd(m.entries[m.cursor].Task)
 		}
 
 	case "e":
@@ -826,10 +834,12 @@ func (m model) mainView() string {
 		footer = m.renderInput()
 	case m.errMsg != "":
 		footer = styleRed.Render("Error: " + m.errMsg)
+	case m.statusMsg != "":
+		footer = styleGreen.Render("✓ " + m.statusMsg)
 	case m.filterQ != "":
 		footer = styleAmber.Render("filter: /"+m.filterQ) + styleFooter.Render("  esc:clear  ?:help")
 	default:
-		footer = styleFooter.Render("n:start  T:tasks  s:stop  e:notes  d:delete  /:filter  ←/→/t:day  w:week  v:stats  ?:help  q:quit")
+		footer = styleFooter.Render("n:start  T:tasks  s:stop  e:notes  d:delete  y:copy  /:filter  ←/→/t:day  w:week  v:stats  ?:help  q:quit")
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -1364,6 +1374,18 @@ func Run(s *store.Store) error {
 	)
 	_, err := p.Run()
 	return err
+}
+
+// copyToClipboardCmd shells out to pbcopy — same approach taskctl/mailctl/
+// notectl/calctl/habctl use for their own "y" copy shortcuts, no clipboard
+// library needed.
+func copyToClipboardCmd(text string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("pbcopy")
+		cmd.Stdin = strings.NewReader(text)
+		_ = cmd.Run()
+		return nil
+	}
 }
 
 func maxInt(a, b int) int {
