@@ -267,6 +267,22 @@ func (s *Store) Delete(id int64) error {
 	return nil
 }
 
+// Restore re-inserts a previously-deleted entry with its exact original
+// ID and fields — used by the TUI's delete-undo ("u" within undoWindow of
+// a delete). SQLite allows an explicit value in an AUTOINCREMENT column,
+// so the restored row keeps the same ID any other reference to it had.
+func (s *Store) Restore(e models.Entry) error {
+	var stoppedAt any
+	if e.StoppedAt != nil {
+		stoppedAt = e.StoppedAt.Format(timeLayout)
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO entries (id, task, project, started_at, stopped_at, notes, linked_task) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		e.ID, e.Task, e.Project, e.StartedAt.Format(timeLayout), stoppedAt, e.Notes, e.LinkedTask,
+	)
+	return err
+}
+
 // DaySummary aggregates entries for the given date.
 func (s *Store) DaySummary(date time.Time) (models.DaySummary, error) {
 	start := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())

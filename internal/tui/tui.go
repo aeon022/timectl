@@ -148,6 +148,11 @@ type model struct {
 	statusMsg  string // confirmation text (e.g. "Copied to clipboard"), cleared 3s after statusTime on the next keypress — same lazy pattern budgetctl/mailctl/notectl/calctl use
 	statusTime time.Time
 
+	// undo: "u" within undoWindow of a delete restores the deleted entry —
+	// same pattern and window taskctl uses for its own delete-undo.
+	// statusTime doubles as its expiry clock (see handleNavKey).
+	lastDeleted *models.Entry
+
 	weekSummaries []models.DaySummary
 	statsText     string
 
@@ -346,8 +351,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleNavKey handles keys when not in input mode.
 func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if time.Since(m.statusTime) > 3*time.Second {
+	// The delete-undo toast gets the longer undoWindow instead of the
+	// usual 3s — it's also the window "u" checks below, so the message
+	// and the capability it describes expire together.
+	clearAfter := 3 * time.Second
+	if m.lastDeleted != nil {
+		clearAfter = undoWindow
+	}
+	if time.Since(m.statusTime) > clearAfter {
 		m.statusMsg = ""
+		m.lastDeleted = nil
 	}
 
 	// Task picker gets its own key handling.
@@ -481,6 +494,14 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.Focus()
 		}
 
+	case "u":
+		if m.lastDeleted != nil {
+			e := m.lastDeleted
+			m.lastDeleted = nil
+			m.statusMsg = ""
+			return m, m.cmdRestore(*e)
+		}
+
 	case "y":
 		if m.current == viewMain && len(m.entries) > 0 {
 			m.statusMsg = "Copied to clipboard"
@@ -589,8 +610,11 @@ func (m model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		case modeConfirmDelete:
 			if val == "y" && len(m.entries) > 0 {
-				id := m.entries[m.cursor].ID
-				return m, m.cmdDelete(id)
+				e := m.entries[m.cursor]
+				m.lastDeleted = &e
+				m.statusMsg = fmt.Sprintf("Deleted %q — press u to undo", e.Task)
+				m.statusTime = time.Now()
+				return m, m.cmdDelete(e.ID)
 			}
 		case modeEditNotes:
 			if len(m.entries) > 0 {
@@ -740,6 +764,18 @@ func (m model) cmdDelete(id int64) tea.Cmd {
 	}
 }
 
+// cmdRestore re-inserts a deleted entry with its original ID/fields — used
+// by "u" within undoWindow of a delete.
+func (m model) cmdRestore(e models.Entry) tea.Cmd {
+	s := m.store
+	return func() tea.Msg {
+		if err := s.Restore(e); err != nil {
+			return errMsg{err}
+		}
+		return refreshMsg{}
+	}
+}
+
 func (m model) cmdSaveNotes(id int64, notes string) tea.Cmd {
 	s := m.store
 	return func() tea.Msg {
@@ -815,6 +851,10 @@ func (m model) View() string {
 // what mainView actually renders.
 const heatmapPanelW = 30
 
+// undoWindow is how long after a delete "u" still restores it — same
+// duration taskctl uses for its own delete-undo.
+const undoWindow = 5 * time.Second
+
 func (m model) mainView() string {
 	w, h := m.width, m.height
 	if w < 40 {
@@ -845,7 +885,7 @@ func (m model) mainView() string {
 	case m.filterQ != "":
 		footer = styleAmber.Render("filter: /"+m.filterQ) + styleFooter.Render("  esc:clear  ?:help")
 	default:
-		footer = styleFooter.Render("n:start  T:tasks  s:stop  e:notes  d:delete  y:copy  /:filter  ←/→/t:day  w:week  v:stats  ?:help  q:quit")
+		footer = styleFooter.Render("n:start  T:tasks  s:stop  e:notes  d:delete  u:undo  y:copy  /:filter  ←/→/t:day  w:week  v:stats  ?:help  q:quit")
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
