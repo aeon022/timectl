@@ -79,20 +79,24 @@ func (s *Store) init() error {
 		return err
 	}
 
-	// Migration: add linked_task column if it doesn't exist yet.
-	// SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we ignore the error.
+	// Migration: add linked_task/linked_task_id columns if they don't exist
+	// yet. SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we
+	// ignore the error.
 	_, _ = s.db.Exec(`ALTER TABLE entries ADD COLUMN linked_task TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.db.Exec(`ALTER TABLE entries ADD COLUMN linked_task_id TEXT NOT NULL DEFAULT ''`)
 
 	return nil
 }
 
 // Start inserts a new running entry. Returns an error if one is already running.
 func (s *Store) Start(task, project string) (models.Entry, error) {
-	return s.StartLinked(task, project, "")
+	return s.StartLinked(task, project, "", "")
 }
 
-// StartLinked inserts a new running entry optionally linked to a taskctl task.
-func (s *Store) StartLinked(task, project, linkedTask string) (models.Entry, error) {
+// StartLinked inserts a new running entry optionally linked to a taskctl
+// task — linkedTaskID is its stable taskctl id (empty if the entry isn't
+// tied to a task, or the task picker's title-only path is used).
+func (s *Store) StartLinked(task, project, linkedTask, linkedTaskID string) (models.Entry, error) {
 	running, err := s.Running()
 	if err != nil {
 		return models.Entry{}, err
@@ -104,8 +108,8 @@ func (s *Store) StartLinked(task, project, linkedTask string) (models.Entry, err
 
 	now := time.Now()
 	res, err := s.db.Exec(
-		`INSERT INTO entries (task, project, started_at, linked_task) VALUES (?, ?, ?, ?)`,
-		task, project, now.Format(timeLayout), linkedTask,
+		`INSERT INTO entries (task, project, started_at, linked_task, linked_task_id) VALUES (?, ?, ?, ?, ?)`,
+		task, project, now.Format(timeLayout), linkedTask, linkedTaskID,
 	)
 	if err != nil {
 		return models.Entry{}, fmt.Errorf("insert entry: %w", err)
@@ -113,22 +117,33 @@ func (s *Store) StartLinked(task, project, linkedTask string) (models.Entry, err
 
 	id, _ := res.LastInsertId()
 	return models.Entry{
-		ID:         id,
-		Task:       task,
-		Project:    project,
-		StartedAt:  now,
-		LinkedTask: linkedTask,
+		ID:           id,
+		Task:         task,
+		Project:      project,
+		StartedAt:    now,
+		LinkedTask:   linkedTask,
+		LinkedTaskID: linkedTaskID,
 	}, nil
 }
 
-// OpenTasks reads the taskctl database and returns titles of open (needsAction) tasks.
-// Sorted by priority DESC, due_date ASC. Returns empty slice (no error) if DB not found.
-func (s *Store) OpenTasks() ([]string, error) {
+// OpenTask is one open taskctl task, as offered by the "T" task-picker.
+type OpenTask struct {
+	ID    string
+	Title string
+}
+
+// OpenTasks reads the taskctl database and returns open (needsAction)
+// tasks, sorted by priority DESC, due_date ASC. Returns an empty slice (no
+// error) if taskctl's DB isn't found, so timectl works standalone too.
+func (s *Store) OpenTasks() ([]OpenTask, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, nil
 	}
-	dbPath := filepath.Join(home, ".local", "share", "taskctl", "tasks.db")
+	// Matches taskctl's own config.DBPath() — a prior version of this
+	// pointed at ~/.local/share/taskctl/tasks.db, a path taskctl has never
+	// written to, so the task picker silently returned nothing.
+	dbPath := filepath.Join(home, "Library", "Application Support", "taskctl", "taskctl.db")
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil, nil
 	}
@@ -140,7 +155,7 @@ func (s *Store) OpenTasks() ([]string, error) {
 	defer tdb.Close()
 
 	rows, err := tdb.Query(`
-		SELECT title FROM tasks
+		SELECT id, title FROM tasks
 		WHERE status = 'needsAction'
 		ORDER BY priority DESC, due_date ASC
 	`)
@@ -149,15 +164,15 @@ func (s *Store) OpenTasks() ([]string, error) {
 	}
 	defer rows.Close()
 
-	var titles []string
+	var tasks []OpenTask
 	for rows.Next() {
-		var title string
-		if err := rows.Scan(&title); err != nil {
+		var t OpenTask
+		if err := rows.Scan(&t.ID, &t.Title); err != nil {
 			continue
 		}
-		titles = append(titles, title)
+		tasks = append(tasks, t)
 	}
-	return titles, nil
+	return tasks, nil
 }
 
 // Stop sets stopped_at on the currently running entry.
@@ -197,11 +212,11 @@ func (s *Store) Stop(notes string) (models.Entry, error) {
 // Running returns the currently active entry or nil.
 func (s *Store) Running() (*models.Entry, error) {
 	row := s.db.QueryRow(
-		`SELECT id, task, project, started_at, notes, linked_task FROM entries WHERE stopped_at IS NULL LIMIT 1`,
+		`SELECT id, task, project, started_at, notes, linked_task, linked_task_id FROM entries WHERE stopped_at IS NULL LIMIT 1`,
 	)
 	var e models.Entry
 	var startedStr string
-	err := row.Scan(&e.ID, &e.Task, &e.Project, &startedStr, &e.Notes, &e.LinkedTask)
+	err := row.Scan(&e.ID, &e.Task, &e.Project, &startedStr, &e.Notes, &e.LinkedTask, &e.LinkedTaskID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -240,7 +255,7 @@ func (s *Store) Week() ([]models.Entry, error) {
 // Range returns entries whose started_at falls within [from, to).
 func (s *Store) Range(from, to time.Time) ([]models.Entry, error) {
 	rows, err := s.db.Query(
-		`SELECT id, task, project, started_at, stopped_at, notes, linked_task
+		`SELECT id, task, project, started_at, stopped_at, notes, linked_task, linked_task_id
 		   FROM entries
 		  WHERE started_at >= ? AND started_at < ?
 		  ORDER BY started_at ASC`,
@@ -277,8 +292,8 @@ func (s *Store) Restore(e models.Entry) error {
 		stoppedAt = e.StoppedAt.Format(timeLayout)
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO entries (id, task, project, started_at, stopped_at, notes, linked_task) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		e.ID, e.Task, e.Project, e.StartedAt.Format(timeLayout), stoppedAt, e.Notes, e.LinkedTask,
+		`INSERT INTO entries (id, task, project, started_at, stopped_at, notes, linked_task, linked_task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.ID, e.Task, e.Project, e.StartedAt.Format(timeLayout), stoppedAt, e.Notes, e.LinkedTask, e.LinkedTaskID,
 	)
 	return err
 }
@@ -349,7 +364,7 @@ func (s *Store) FilteredRange(from, to time.Time, project string) ([]models.Entr
 		return s.Range(from, to)
 	}
 	rows, err := s.db.Query(
-		`SELECT id, task, project, started_at, stopped_at, notes, linked_task
+		`SELECT id, task, project, started_at, stopped_at, notes, linked_task, linked_task_id
 		   FROM entries
 		  WHERE started_at >= ? AND started_at < ? AND project = ?
 		  ORDER BY started_at ASC`,
@@ -370,7 +385,7 @@ func scanEntries(rows *sql.Rows) ([]models.Entry, error) {
 		var e models.Entry
 		var startedStr string
 		var stoppedStr sql.NullString
-		if err := rows.Scan(&e.ID, &e.Task, &e.Project, &startedStr, &stoppedStr, &e.Notes, &e.LinkedTask); err != nil {
+		if err := rows.Scan(&e.ID, &e.Task, &e.Project, &startedStr, &stoppedStr, &e.Notes, &e.LinkedTask, &e.LinkedTaskID); err != nil {
 			return nil, err
 		}
 		t, err := time.Parse(timeLayout, startedStr)

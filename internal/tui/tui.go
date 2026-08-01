@@ -107,7 +107,7 @@ type errMsg struct{ err error }
 type weekLoadedMsg struct{ summaries []models.DaySummary }
 type statsLoadedMsg struct{ text string }
 type heatLoadedMsg struct{ data []heatDay }
-type taskPickMsg struct{ tasks []string }
+type taskPickMsg struct{ tasks []store.OpenTask }
 
 // ── Heat data ─────────────────────────────────────────────────────────────────
 
@@ -164,7 +164,7 @@ type model struct {
 	goalHours  float64
 	hourlyRate float64
 
-	taskList   []string
+	taskList   []store.OpenTask
 	taskCursor int
 
 	// "?" transient help popup — reachable from viewMain, viewWeek, and
@@ -509,6 +509,20 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, copyToClipboardCmd(m.entries[m.cursor].Task)
 		}
 
+	case "g":
+		if m.current == viewMain && len(m.entries) > 0 {
+			id := m.entries[m.cursor].LinkedTaskID
+			if id == "" {
+				break
+			}
+			return m, tea.ExecProcess(exec.Command("taskctl", "--task", id), func(err error) tea.Msg {
+				if err != nil {
+					return errMsg{err}
+				}
+				return refreshMsg{}
+			})
+		}
+
 	case "e":
 		if m.current == viewMain && len(m.entries) > 0 {
 			m.imode = modeEditNotes
@@ -559,7 +573,7 @@ func (m model) handleTaskPickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.taskList) > 0 {
 			task := m.taskList[m.taskCursor]
 			m.current = viewMain
-			return m, m.cmdStartLinked(task, "", task)
+			return m, m.cmdStartLinked(task.Title, "", task.Title, task.ID)
 		}
 	}
 	return m, nil
@@ -817,10 +831,10 @@ func (m model) cmdLoadTasks() tea.Cmd {
 	}
 }
 
-func (m model) cmdStartLinked(task, project, linkedTask string) tea.Cmd {
+func (m model) cmdStartLinked(task, project, linkedTask, linkedTaskID string) tea.Cmd {
 	s := m.store
 	return func() tea.Msg {
-		_, err := s.StartLinked(task, project, linkedTask)
+		_, err := s.StartLinked(task, project, linkedTask, linkedTaskID)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -885,7 +899,7 @@ func (m model) mainView() string {
 	case m.filterQ != "":
 		footer = styleAmber.Render("filter: /"+m.filterQ) + styleFooter.Render("  esc:clear  ?:help")
 	default:
-		footer = styleFooter.Render("n:start  T:tasks  s:stop  e:notes  d:delete  u:undo  y:copy  /:filter  ←/→/t:day  w:week  v:stats  ?:help  q:quit")
+		footer = styleFooter.Render("n:start  T:tasks  s:stop  e:notes  d:delete  u:undo  y:copy  g:open task  /:filter  ←/→/t:day  w:week  v:stats  ?:help  q:quit")
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -1210,11 +1224,11 @@ func (m model) taskPickView() string {
 	} else if len(m.taskList) == 0 {
 		b.WriteString(styleMuted.Render("  No open tasks found in taskctl.") + "\n")
 	} else {
-		for i, title := range m.taskList {
+		for i, t := range m.taskList {
 			if i == m.taskCursor {
-				b.WriteString(styleSelected.Render("  "+title) + "\n")
+				b.WriteString(styleSelected.Render("  "+t.Title) + "\n")
 			} else {
-				b.WriteString("  " + styleMuted.Render(title) + "\n")
+				b.WriteString("  " + styleMuted.Render(t.Title) + "\n")
 			}
 		}
 	}
@@ -1240,6 +1254,9 @@ func (m model) helpContent() string {
 	b.WriteString(row("j / k", "move selection"))
 	b.WriteString(row("e", "edit notes"))
 	b.WriteString(row("d", "delete entry (asks to confirm)"))
+	b.WriteString(row("u", "undo last delete"))
+	b.WriteString(row("y", "copy task name to clipboard"))
+	b.WriteString(row("g", "open linked taskctl task (if entry has one)"))
 	b.WriteString(row("/", "filter by task, project, notes (esc clears)"))
 	b.WriteString(section("Views"))
 	b.WriteString(row("← / →", "browse previous / next day"))
