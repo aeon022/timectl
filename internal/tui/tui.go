@@ -819,9 +819,9 @@ func (m model) mainView() string {
 	case m.errMsg != "":
 		footer = styleRed.Render("Error: " + m.errMsg)
 	case m.filterQ != "":
-		footer = styleAmber.Render("filter: /"+m.filterQ) + styleFooter.Render("  ·  esc clear · ? help")
+		footer = styleAmber.Render("filter: /"+m.filterQ) + styleFooter.Render("  esc:clear  ?:help")
 	default:
-		footer = styleFooter.Render("n start · T tasks · s stop · e notes · d delete · / filter · ←/→/t day · w week · v stats · ? help · q")
+		footer = styleFooter.Render("n:start  T:tasks  s:stop  e:notes  d:delete  /:filter  ←/→/t:day  w:week  v:stats  ?:help  q:quit")
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -938,7 +938,7 @@ func (m model) renderToday(width, height int) string {
 	lines = append(lines, styleDivider.Render(strings.Repeat("─", width-4)))
 
 	if len(m.entries) == 0 {
-		lines = append(lines, "", styleMuted.Render("  Press n to start a timer."))
+		lines = append(lines, "", styleMuted.Render("  No entries yet — press n to start a timer."))
 		return strings.Join(lines, "\n")
 	}
 
