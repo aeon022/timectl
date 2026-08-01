@@ -145,7 +145,8 @@ type model struct {
 	imode      inputMode
 	input      textinput.Model
 	errMsg     string
-	statusMsg  string // confirmation text (e.g. "Copied to clipboard") — persists until overwritten, same convention errMsg follows
+	statusMsg  string // confirmation text (e.g. "Copied to clipboard"), cleared 3s after statusTime on the next keypress — same lazy pattern budgetctl/mailctl/notectl/calctl use
+	statusTime time.Time
 
 	weekSummaries []models.DaySummary
 	statsText     string
@@ -345,6 +346,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleNavKey handles keys when not in input mode.
 func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if time.Since(m.statusTime) > 3*time.Second {
+		m.statusMsg = ""
+	}
+
 	// Task picker gets its own key handling.
 	if m.current == viewTaskPick {
 		return m.handleTaskPickKey(msg)
@@ -479,6 +484,7 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y":
 		if m.current == viewMain && len(m.entries) > 0 {
 			m.statusMsg = "Copied to clipboard"
+			m.statusTime = time.Now()
 			return m, copyToClipboardCmd(m.entries[m.cursor].Task)
 		}
 
