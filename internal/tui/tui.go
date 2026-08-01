@@ -382,6 +382,14 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 		}
 
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		// jump to the nth entry — no scroll window to account for here,
+		// today's entry list renders in full (see rowHitTest's comment).
+		n := int(msg.String()[0] - '0')
+		if n <= len(m.entries) {
+			m.cursor = n - 1
+		}
+
 	case "j", "down":
 		if m.cursor < len(m.entries)-1 {
 			m.cursor++
