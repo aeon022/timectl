@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -12,8 +13,10 @@ import (
 )
 
 var (
-	invoiceMonth string
-	invoiceRate  float64
+	invoiceMonth  string
+	invoiceRate   float64
+	invoiceClient string
+	invoiceOutput string
 )
 
 var invoiceCmd = &cobra.Command{
@@ -62,18 +65,28 @@ If no rate is set, amounts are shown as "$0.00".`,
 			return fmt.Errorf("load entries: %w", err)
 		}
 
+		var b strings.Builder
 		monthLabel := from.Format("January 2006")
-		fmt.Printf("# Invoice — %s\n", monthLabel)
-		if rate > 0 {
-			fmt.Printf("Rate: $%.0f/h\n", rate)
+		fmt.Fprintf(&b, "# Invoice — %s\n", monthLabel)
+		if invoiceClient != "" {
+			fmt.Fprintf(&b, "Client: %s\n", invoiceClient)
 		}
-		fmt.Println()
+		if rate > 0 {
+			fmt.Fprintf(&b, "Rate: $%.2f/h\n", rate)
+		}
+		fmt.Fprintln(&b)
 
-		// Per-entry table.
-		fmt.Println("## Time Entries")
-		fmt.Println()
-		fmt.Println("| Task | Project | Duration | Amount |")
-		fmt.Println("|------|---------|----------|--------|")
+		// Per-entry table. The Amount column only makes sense once a rate is
+		// known — showing a fake "$0.00" for every row when no rate was set
+		// reads as "you earned nothing" rather than "rate not configured".
+		b.WriteString("## Time Entries\n\n")
+		if rate > 0 {
+			b.WriteString("| Task | Project | Duration | Amount |\n")
+			b.WriteString("|------|---------|----------|--------|\n")
+		} else {
+			b.WriteString("| Task | Project | Duration |\n")
+			b.WriteString("|------|---------|----------|\n")
+		}
 
 		var grandTotal time.Duration
 		for _, e := range entries {
@@ -83,24 +96,20 @@ If no rate is set, amounts are shown as "$0.00".`,
 			if proj == "" {
 				proj = "—"
 			}
-			amount := ""
 			if rate > 0 {
-				amount = fmt.Sprintf("$%.2f", d.Hours()*rate)
+				fmt.Fprintf(&b, "| %s | %s | %s | $%.2f |\n",
+					e.Task, proj, models.FormatDuration(d), d.Hours()*rate)
 			} else {
-				amount = "$0.00"
+				fmt.Fprintf(&b, "| %s | %s | %s |\n", e.Task, proj, models.FormatDuration(d))
 			}
-			fmt.Printf("| %s | %s | %s | %s |\n",
-				e.Task, proj, models.FormatDuration(d), amount)
 		}
 
-		totalAmount := ""
 		if rate > 0 {
-			totalAmount = fmt.Sprintf("**$%.2f**", grandTotal.Hours()*rate)
+			fmt.Fprintf(&b, "| **Total** | | **%s** | **$%.2f** |\n",
+				models.FormatDuration(grandTotal), grandTotal.Hours()*rate)
 		} else {
-			totalAmount = "**$0.00**"
+			fmt.Fprintf(&b, "| **Total** | | **%s** |\n", models.FormatDuration(grandTotal))
 		}
-		fmt.Printf("| **Total** | | **%s** | %s |\n",
-			models.FormatDuration(grandTotal), totalAmount)
 
 		// Project summary (only if any entries have a project).
 		projTotals := map[string]time.Duration{}
@@ -110,45 +119,46 @@ If no rate is set, amounts are shown as "$0.00".`,
 			}
 		}
 		if len(projTotals) > 0 {
-			fmt.Println()
-			fmt.Println("## By Project")
-			fmt.Println()
-			fmt.Println("| Project | Duration | Amount |")
-			fmt.Println("|---------|----------|--------|")
+			b.WriteString("\n## By Project\n\n")
+			if rate > 0 {
+				b.WriteString("| Project | Duration | Amount |\n")
+				b.WriteString("|---------|----------|--------|\n")
+			} else {
+				b.WriteString("| Project | Duration |\n")
+				b.WriteString("|---------|----------|\n")
+			}
 
-			// Sort projects alphabetically for stable output.
 			projs := make([]string, 0, len(projTotals))
 			for p := range projTotals {
 				projs = append(projs, p)
 			}
-			sortStrings(projs)
+			sort.Slice(projs, func(i, j int) bool { return strings.ToLower(projs[i]) < strings.ToLower(projs[j]) })
 
 			for _, p := range projs {
 				d := projTotals[p]
-				amount := ""
 				if rate > 0 {
-					amount = fmt.Sprintf("$%.2f", d.Hours()*rate)
+					fmt.Fprintf(&b, "| %s | %s | $%.2f |\n", p, models.FormatDuration(d), d.Hours()*rate)
 				} else {
-					amount = "$0.00"
+					fmt.Fprintf(&b, "| %s | %s |\n", p, models.FormatDuration(d))
 				}
-				fmt.Printf("| %s | %s | %s |\n", p, models.FormatDuration(d), amount)
 			}
 		}
 
+		if invoiceOutput != "" {
+			if err := os.WriteFile(invoiceOutput, []byte(b.String()), 0o644); err != nil {
+				return fmt.Errorf("write %s: %w", invoiceOutput, err)
+			}
+			fmt.Fprintf(os.Stderr, "Wrote invoice → %s\n", invoiceOutput)
+			return nil
+		}
+		fmt.Print(b.String())
 		return nil
 	},
-}
-
-// sortStrings sorts a string slice in place (simple insertion sort to avoid importing sort).
-func sortStrings(ss []string) {
-	for i := 1; i < len(ss); i++ {
-		for j := i; j > 0 && strings.ToLower(ss[j]) < strings.ToLower(ss[j-1]); j-- {
-			ss[j], ss[j-1] = ss[j-1], ss[j]
-		}
-	}
 }
 
 func init() {
 	invoiceCmd.Flags().StringVar(&invoiceMonth, "month", "", "Month to invoice (YYYY-MM, default: current month)")
 	invoiceCmd.Flags().Float64Var(&invoiceRate, "rate", 0, "Hourly rate in $ (overrides TIMECTL_HOURLY_RATE)")
+	invoiceCmd.Flags().StringVar(&invoiceClient, "client", "", "Client/company name to show in the invoice header")
+	invoiceCmd.Flags().StringVarP(&invoiceOutput, "output", "o", "", "Output file (default: stdout)")
 }
