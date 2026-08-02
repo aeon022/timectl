@@ -49,9 +49,9 @@ func init() {
 }
 
 func openStore() (*store.Store, error) {
-	path, err := store.DefaultPath()
+	path, shared, err := store.ResolveDBPath()
 	if err != nil {
 		return nil, fmt.Errorf("resolve db path: %w", err)
 	}
-	return store.Open(path)
+	return store.Open(path, shared)
 }

@@ -3,7 +3,7 @@ module github.com/aeon022/timectl
 go 1.26.5
 
 require (
-	github.com/aeon022/missionctl-core v0.0.0-20260801195357-209b81f4515e
+	github.com/aeon022/missionctl-core v0.0.0-20260802150042-e2881ef3fdcf
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
@@ -43,10 +43,8 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect
-	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.3.8 // indirect
-	golang.org/x/tools v0.47.0 // indirect
 	modernc.org/libc v1.74.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

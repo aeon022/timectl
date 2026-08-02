@@ -19,7 +19,7 @@ import (
 func newTestServer(t *testing.T) *mcpserver.MCPServer {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "timectl.db")
-	s, err := store.Open(path)
+	s, err := store.Open(path, false)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
