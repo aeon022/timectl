@@ -206,7 +206,7 @@ func newModel(s *store.Store) model {
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(doRefresh(m.store), tick(), cmdLoadHeat(m.store))
+	return tea.Batch(doRefresh(m.store), tick(), cmdLoadHeat(m.store), idleCheckTick())
 }
 
 func tick() tea.Cmd {
@@ -218,6 +218,71 @@ func tick() tea.Cmd {
 func doRefresh(s *store.Store) tea.Cmd {
 	return func() tea.Msg { return refreshMsg{} }
 }
+
+// idleCheckMsg fires every idleCheckInterval — separate from the 1s tickMsg
+// so a subprocess (ioreg) isn't spawned every second, only every 30s.
+type idleCheckMsg struct{}
+
+const idleCheckInterval = 30 * time.Second
+
+func idleCheckTick() tea.Cmd {
+	return tea.Tick(idleCheckInterval, func(t time.Time) tea.Msg {
+		return idleCheckMsg{}
+	})
+}
+
+// idleThreshold is how long with no keyboard/mouse input system-wide
+// before a running timer auto-stops. Overridable via TIMECTL_IDLE_MINUTES,
+// same env-var convention as TIMECTL_HOURLY_RATE/TIMECTL_GOAL_HOURS.
+func idleThreshold() time.Duration {
+	if v := os.Getenv("TIMECTL_IDLE_MINUTES"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			return time.Duration(f * float64(time.Minute))
+		}
+	}
+	return 10 * time.Minute
+}
+
+// systemIdleSeconds returns how long it's been since the last keyboard or
+// mouse input anywhere on the system (not just this terminal) — the
+// standard `ioreg` HIDIdleTime technique, since a terminal app only sees
+// input when it's the focused window, not system-wide idleness.
+func systemIdleSeconds() (float64, error) {
+	out, err := exec.Command("ioreg", "-c", "IOHIDSystem").Output()
+	if err != nil {
+		return 0, err
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.Contains(line, "HIDIdleTime") {
+			continue
+		}
+		parts := strings.Split(line, "=")
+		if len(parts) != 2 {
+			continue
+		}
+		ns, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+		if err != nil {
+			return 0, err
+		}
+		return ns / 1e9, nil
+	}
+	return 0, fmt.Errorf("HIDIdleTime not found in ioreg output")
+}
+
+// cmdAutoStopIdle stops the running timer with a note, for when idle
+// detection fires — same store call "s" (cmdStop) uses, just with a note
+// explaining why it stopped without the user pressing anything.
+func cmdAutoStopIdle(s *store.Store) tea.Cmd {
+	return func() tea.Msg {
+		_, err := s.Stop("auto-stopped (idle)")
+		if err != nil {
+			return errMsg{err}
+		}
+		return idleAutoStoppedMsg{}
+	}
+}
+
+type idleAutoStoppedMsg struct{}
 
 func cmdLoadHeat(s *store.Store) tea.Cmd {
 	return func() tea.Msg {
@@ -254,6 +319,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.running = running
 		m.animStep++
 		return m, tick()
+
+	case idleCheckMsg:
+		if m.running == nil {
+			return m, idleCheckTick()
+		}
+		idleSecs, err := systemIdleSeconds()
+		if err != nil || time.Duration(idleSecs*float64(time.Second)) < idleThreshold() {
+			return m, idleCheckTick()
+		}
+		return m, tea.Batch(cmdAutoStopIdle(m.store), idleCheckTick())
+
+	case idleAutoStoppedMsg:
+		m.statusMsg = fmt.Sprintf("Timer auto-stopped — idle %s", models.FormatDuration(idleThreshold()))
+		m.statusTime = time.Now()
+		return m, doRefresh(m.store)
 
 	case refreshMsg:
 		var entries []models.Entry
