@@ -141,7 +141,19 @@ Run `timectl` with no arguments to open the TUI.
 
 **Stats view** (`v`) shows top tasks by time, top projects, average day length (last 14 days), and current consecutive-day streak.
 
-Data is stored at `~/.local/share/timectl/time.db` (SQLite, WAL mode).
+Data is stored at `~/.local/share/timectl/time.db` (SQLite, WAL mode by default — see below for syncing across devices).
+
+---
+
+## Syncing across devices
+
+To share your time entries across devices, set `TIMECTL_DATA_DIR` to a folder you already sync yourself — iCloud Drive, Dropbox, Syncthing, etc. (timectl has no config-file setting for this, only the env var):
+
+```bash
+export TIMECTL_DATA_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/timectl"
+```
+
+Once set, timectl automatically switches its SQLite journal mode from WAL to rollback-journal — WAL splits the database across multiple files that a folder-sync client can't update atomically together, so this switch keeps the directory down to a single consistent file whenever timectl isn't actively writing. A same-machine lock also prevents two timectl processes from opening the database at once (run `timectl doctor` to see the current mode and path). This only protects against the same-machine and stale-snapshot failure modes, not two machines editing at the exact same instant; an undownloaded iCloud file is reported explicitly rather than as a bare error.
 
 ---
 
