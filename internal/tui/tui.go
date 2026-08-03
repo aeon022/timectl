@@ -11,6 +11,7 @@ import (
 
 	"github.com/aeon022/missionctl-core/keymap"
 	"github.com/aeon022/missionctl-core/overlay"
+	"github.com/aeon022/missionctl-core/palette"
 	"github.com/aeon022/missionctl-core/theme"
 	"github.com/aeon022/timectl/internal/models"
 	"github.com/aeon022/timectl/internal/store"
@@ -127,7 +128,35 @@ const (
 	modeConfirmDelete
 	modeEditNotes
 	modeFilter
+	modeCommand
 )
+
+// ── command palette (":") ────────────────────────────────────────────────────
+//
+// Types out full words instead of memorizing single-key shortcuts. Reuses
+// the exact same key handling every shortcut already goes through
+// (handleNavKey) by replaying the mapped keypress, so behavior is
+// guaranteed identical to typing the key directly. Matching logic lives in
+// missionctl-core/palette (shared across the suite); this list is
+// timectl-specific.
+var paletteCommands = []palette.Command{
+	{Name: "new", Desc: "Start new timer (task@project)", Key: "n"},
+	{Name: "taskpick", Desc: "Start timer from open taskctl task", Key: "T"},
+	{Name: "stop", Desc: "Stop running timer", Key: "s"},
+	{Name: "restart", Desc: "Restart selected entry's task", Key: "r"},
+	{Name: "copy", Desc: "Copy selected entry into new-task input", Key: "c"},
+	{Name: "edit", Desc: "Edit notes", Key: "e"},
+	{Name: "delete", Desc: "Delete entry (asks to confirm)", Key: "d"},
+	{Name: "undo", Desc: "Undo last delete", Key: "u"},
+	{Name: "clipboard", Desc: "Copy task name to clipboard", Key: "y"},
+	{Name: "goto", Desc: "Open linked taskctl task", Key: "g"},
+	{Name: "today", Desc: "Back to today", Key: "t"},
+	{Name: "week", Desc: "Week breakdown", Key: "w"},
+	{Name: "stats", Desc: "Stats (top tasks, streak, earnings)", Key: "v"},
+	{Name: "search", Desc: "Filter by task, project, notes", Key: "/"},
+	{Name: "help", Desc: "Show help", Key: "?"},
+	{Name: "quit", Desc: "Quit timectl", Key: "q"},
+}
 
 // ── model ────────────────────────────────────────────────────────────────────
 
@@ -145,6 +174,7 @@ type model struct {
 	hoverRow   int // m.entries index under the mouse cursor, -1 when none
 	imode      inputMode
 	input      textinput.Model
+	paletteCursor int // index into the filtered palette command matches, valid while imode == modeCommand
 	errMsg     string
 	statusMsg  string // confirmation text (e.g. "Copied to clipboard"), cleared 3s after statusTime on the next keypress — same lazy pattern budgetctl/mailctl/notectl/calctl use
 	statusTime time.Time
@@ -627,6 +657,15 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.Focus()
 		}
 
+	case ":":
+		if m.current == viewMain {
+			m.imode = modeCommand
+			m.paletteCursor = 0
+			m.input.Placeholder = "command…"
+			m.input.SetValue("")
+			m.input.Focus()
+		}
+
 	case "?":
 		m = m.openHelp()
 	}
@@ -662,6 +701,49 @@ func (m model) handleTaskPickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleInputKey handles keys while in an input prompt.
 func (m model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.imode == modeCommand {
+		closePalette := func(mm model) model {
+			mm.imode = modeNone
+			mm.input.Blur()
+			mm.input.SetValue("")
+			mm.paletteCursor = 0
+			return mm
+		}
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "esc":
+			return closePalette(m), nil
+		case "up", "ctrl+p":
+			if m.paletteCursor > 0 {
+				m.paletteCursor--
+			}
+			return m, nil
+		case "down", "ctrl+n":
+			matches := palette.Match(paletteCommands, m.input.Value())
+			if m.paletteCursor < len(matches)-1 {
+				m.paletteCursor++
+			}
+			return m, nil
+		case "enter":
+			matches := palette.Match(paletteCommands, m.input.Value())
+			if len(matches) == 0 {
+				return closePalette(m), nil
+			}
+			if m.paletteCursor >= len(matches) {
+				m.paletteCursor = len(matches) - 1
+			}
+			chosen := matches[m.paletteCursor]
+			m = closePalette(m)
+			replay := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(chosen.Key)}
+			return m.handleNavKey(replay)
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.paletteCursor = 0
+		return m, cmd
+	}
+
 	// Filter mode filters live while typing.
 	if m.imode == modeFilter {
 		switch msg.String() {
@@ -965,8 +1047,16 @@ func (m model) mainView() string {
 		rightW = 20
 	}
 
-	left := panelStyle.Width(heatW).Height(h - 6).Render(m.renderHeatmap())
-	right := panelStyle.Width(rightW).Height(h - 6).Render(m.renderToday(rightW, h-6))
+	panelH := h - 6
+	if m.imode == modeCommand {
+		// The palette's own footer block grows past the usual single input
+		// line (up to 6 match rows) — shrink the fixed-height panels above
+		// it by the same amount so the whole frame still fits the terminal
+		// instead of pushing the header off the top.
+		panelH -= 7
+	}
+	left := panelStyle.Width(heatW).Height(panelH).Render(m.renderHeatmap())
+	right := panelStyle.Width(rightW).Height(panelH).Render(m.renderToday(rightW, panelH))
 	panels := lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right)
 
 	var footer string
@@ -1219,6 +1309,9 @@ func (m model) renderToday(width, height int) string {
 }
 
 func (m model) renderInput() string {
+	if m.imode == modeCommand {
+		return m.renderPaletteBlock()
+	}
 	var prompt string
 	switch m.imode {
 	case modeNewTask:
@@ -1233,6 +1326,29 @@ func (m model) renderInput() string {
 		prompt = "/ "
 	}
 	return "  " + styleAmber.Render(prompt) + m.input.View()
+}
+
+// renderPaletteBlock renders the ":" command palette's input line + up to 6
+// live-filtered matches, as a single multi-line string joined for
+// lipgloss.JoinVertical (mainView's footer slot).
+func (m model) renderPaletteBlock() string {
+	lines := []string{"  " + styleAmber.Render(": ") + m.input.View()}
+	matches := palette.Match(paletteCommands, m.input.Value())
+	if len(matches) > 6 {
+		matches = matches[:6]
+	}
+	if len(matches) == 0 {
+		lines = append(lines, "    "+styleMuted.Render("no matching command"))
+	}
+	for i, c := range matches {
+		row := fmt.Sprintf("%-9s %s", c.Name, c.Desc)
+		if i == m.paletteCursor {
+			lines = append(lines, "    "+styleGreen.Render("▶ "+row))
+		} else {
+			lines = append(lines, "      "+styleMuted.Render(row))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m model) weekView() string {
@@ -1334,6 +1450,7 @@ func (m model) helpContent() string {
 		Row("y", "copy task name to clipboard").
 		Row("g", "open linked taskctl task (if entry has one)").
 		Row("/", "filter by task, project, notes (esc clears)").
+		Row(":", "command palette — type an action by name").
 		Section("Views").
 		Row("← / →", "browse previous / next day").
 		Row("t", "back to today").

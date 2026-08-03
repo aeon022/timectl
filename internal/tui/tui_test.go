@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aeon022/missionctl-core/palette"
 	"github.com/aeon022/timectl/internal/models"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,6 +15,47 @@ import (
 
 func newTestModel() model {
 	return model{width: 100, height: 30, input: textinput.New()}
+}
+
+func TestCommandPalette_TypeFilterAndExecute(t *testing.T) {
+	m := newTestModel()
+
+	mi, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(":")})
+	m = mi.(model)
+	if m.imode != modeCommand {
+		t.Fatalf("expected modeCommand after ':', got %v", m.imode)
+	}
+
+	for _, r := range "sto" {
+		mi, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = mi.(model)
+	}
+	matches := palette.Match(paletteCommands, m.input.Value())
+	if len(matches) == 0 || matches[0].Name != "stop" {
+		t.Fatalf("expected 'stop' to be the top match for query %q, got %v", m.input.Value(), matches)
+	}
+
+	var cmd tea.Cmd
+	mi, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mi.(model)
+	if m.imode != modeNone {
+		t.Errorf("expected palette to close (modeNone) after executing a command, got %v", m.imode)
+	}
+	if cmd == nil {
+		t.Error("expected 'stop' command to replay 's' and return cmdStop's command")
+	}
+}
+
+func TestCommandPalette_EscCloses(t *testing.T) {
+	m := newTestModel()
+	mi, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(":")})
+	m = mi.(model)
+
+	mi, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = mi.(model)
+	if m.imode != modeNone {
+		t.Errorf("expected esc to close the palette (modeNone), got %v", m.imode)
+	}
 }
 
 func TestHelpOverlay_OpenScrollClose(t *testing.T) {
