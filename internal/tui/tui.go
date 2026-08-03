@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aeon022/missionctl-core/keymap"
 	"github.com/aeon022/missionctl-core/overlay"
 	"github.com/aeon022/missionctl-core/theme"
 	"github.com/aeon022/timectl/internal/models"
@@ -1318,35 +1319,30 @@ func (m model) taskPickView() string {
 }
 
 func (m model) helpContent() string {
-	row := func(k, desc string) string {
-		return "  " + styleBlue.Render(fmt.Sprintf("%-10s", k)) + styleMuted.Render(desc) + "\n"
-	}
-	section := func(t string) string { return "\n  " + styleAmber.Render(t) + "\n" }
-
-	var b strings.Builder
-	b.WriteString(section("Timer"))
-	b.WriteString(row("n", "start new timer (task@project)"))
-	b.WriteString(row("T", "task picker — start timer from open taskctl task"))
-	b.WriteString(row("s", "stop running timer"))
-	b.WriteString(row("r", "restart selected entry's task"))
-	b.WriteString(row("c", "copy selected entry into new-task input"))
-	b.WriteString(section("Entries"))
-	b.WriteString(row("j / k", "move selection"))
-	b.WriteString(row("e", "edit notes"))
-	b.WriteString(row("d", "delete entry (asks to confirm)"))
-	b.WriteString(row("u", "undo last delete"))
-	b.WriteString(row("y", "copy task name to clipboard"))
-	b.WriteString(row("g", "open linked taskctl task (if entry has one)"))
-	b.WriteString(row("/", "filter by task, project, notes (esc clears)"))
-	b.WriteString(section("Views"))
-	b.WriteString(row("← / →", "browse previous / next day"))
-	b.WriteString(row("t", "back to today"))
-	b.WriteString(row("w", "week breakdown"))
-	b.WriteString(row("v", "stats (top tasks, streak, earnings)"))
-	b.WriteString(section("Other"))
-	b.WriteString(row("?", "toggle this help"))
-	b.WriteString(row("q", "quit / back"))
-	return b.String()
+	return keymap.New("timectl", "time tracking from the terminal").
+		Section("Timer").
+		Row("n", "start new timer (task@project)").
+		Row("T", "task picker — start timer from open taskctl task").
+		Row("s", "stop running timer").
+		Row("r", "restart selected entry's task").
+		Row("c", "copy selected entry into new-task input").
+		Section("Entries").
+		Row("j / k", "move selection").
+		Row("e", "edit notes").
+		Row("d", "delete entry (asks to confirm)").
+		Row("u", "undo last delete").
+		Row("y", "copy task name to clipboard").
+		Row("g", "open linked taskctl task (if entry has one)").
+		Row("/", "filter by task, project, notes (esc clears)").
+		Section("Views").
+		Row("← / →", "browse previous / next day").
+		Row("t", "back to today").
+		Row("w", "week breakdown").
+		Row("v", "stats (top tasks, streak, earnings)").
+		Section("Other").
+		Row("?", "toggle this help").
+		Row("q", "quit / back").
+		String()
 }
 
 // backgroundView renders whichever view help was opened from (help is
