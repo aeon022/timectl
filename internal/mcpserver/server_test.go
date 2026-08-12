@@ -3,33 +3,27 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/aeon022/timectl/internal/store"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 // newTestServer builds an MCPServer wired to a temporary store, using the
-// same addXxx(srv, s) registration functions Serve() uses — without calling
-// Serve() itself, which blocks forever on stdio. All four tools are pure
-// local SQLite; there's no external integration to avoid here.
+// same addXxx(srv) registration functions Serve() uses — without calling
+// Serve() itself, which blocks forever on stdio. Each handler opens its own
+// store per call via openStore(), which resolves TIMECTL_DATA_DIR — set here
+// to an isolated temp dir so tests never touch the real database.
 func newTestServer(t *testing.T) *mcpserver.MCPServer {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "timectl.db")
-	s, err := store.Open(path, false)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { s.Close() })
+	t.Setenv("TIMECTL_DATA_DIR", t.TempDir())
 
 	srv := mcpserver.NewMCPServer("timectl", "test", mcpserver.WithToolCapabilities(true))
-	addStartTimer(srv, s)
-	addStopTimer(srv, s)
-	addGetTimeLog(srv, s)
-	addGetTimeStats(srv, s)
+	addStartTimer(srv)
+	addStopTimer(srv)
+	addGetTimeLog(srv)
+	addGetTimeStats(srv)
 	return srv
 }
 

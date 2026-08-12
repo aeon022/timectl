@@ -9,11 +9,6 @@ var mcpCmd = &cobra.Command{
 	Use:   "mcp",
 	Short: "Start the MCP server (stdio transport)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		s, err := openStore()
-		if err != nil {
-			return err
-		}
-		defer s.Close()
-		return mcpserver.Serve(s)
+		return mcpserver.Serve()
 	},
 }

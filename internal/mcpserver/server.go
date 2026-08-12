@@ -13,24 +13,43 @@ import (
 )
 
 // Serve starts an MCP server on stdio.
-func Serve(s *store.Store) error {
+//
+// Each tool handler opens its own Store per call (see openStore below)
+// instead of one Store opened here and held for the server's whole
+// lifetime, the way this used to work. store.Open takes an exclusive
+// file lock (see internal/store/sqlite.go) that's meant to be brief —
+// held for one CLI command's duration — but a long-running MCP server
+// holding it permanently meant `timectl` (the plain CLI, e.g. from
+// `missionctl status`) could never open the same database while this
+// server was up, always failing with "already running elsewhere". The
+// sibling tools (habctl, budgetctl, taskctl, diaryctl) already open per
+// request for the same reason; this brings timectl in line with them.
+func Serve() error {
 	srv := server.NewMCPServer(
 		"timectl",
 		"1.0.0",
 		server.WithToolCapabilities(true),
 	)
 
-	addStartTimer(srv, s)
-	addStopTimer(srv, s)
-	addGetTimeLog(srv, s)
-	addGetTimeStats(srv, s)
+	addStartTimer(srv)
+	addStopTimer(srv)
+	addGetTimeLog(srv)
+	addGetTimeStats(srv)
 
 	return server.ServeStdio(srv)
 }
 
+func openStore() (*store.Store, error) {
+	path, shared, err := store.ResolveDBPath()
+	if err != nil {
+		return nil, fmt.Errorf("resolve db path: %w", err)
+	}
+	return store.Open(path, shared)
+}
+
 // ── start_timer ───────────────────────────────────────────────────────────────
 
-func addStartTimer(srv *server.MCPServer, s *store.Store) {
+func addStartTimer(srv *server.MCPServer) {
 	tool := mcp.NewTool("start_timer",
 		mcp.WithDescription("Start a new time-tracking timer. Errors if a timer is already running."),
 		mcp.WithString("task", mcp.Required(), mcp.Description("Name of the task to track")),
@@ -44,6 +63,12 @@ func addStartTimer(srv *server.MCPServer, s *store.Store) {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 		project := req.GetString("project", "")
+
+		s, err := openStore()
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		defer s.Close()
 
 		entry, err := s.Start(task, project)
 		if err != nil {
@@ -62,7 +87,7 @@ func addStartTimer(srv *server.MCPServer, s *store.Store) {
 
 // ── stop_timer ────────────────────────────────────────────────────────────────
 
-func addStopTimer(srv *server.MCPServer, s *store.Store) {
+func addStopTimer(srv *server.MCPServer) {
 	tool := mcp.NewTool("stop_timer",
 		mcp.WithDescription("Stop the currently running timer."),
 		mcp.WithString("notes", mcp.Description("Optional notes to attach")),
@@ -70,6 +95,12 @@ func addStopTimer(srv *server.MCPServer, s *store.Store) {
 
 	srv.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		notes := req.GetString("notes", "")
+
+		s, err := openStore()
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		defer s.Close()
 
 		entry, err := s.Stop(notes)
 		if err != nil {
@@ -93,7 +124,7 @@ func addStopTimer(srv *server.MCPServer, s *store.Store) {
 
 // ── get_time_log ──────────────────────────────────────────────────────────────
 
-func addGetTimeLog(srv *server.MCPServer, s *store.Store) {
+func addGetTimeLog(srv *server.MCPServer) {
 	tool := mcp.NewTool("get_time_log",
 		mcp.WithDescription("Get time log entries for a specific date, optionally filtered by project."),
 		mcp.WithString("date", mcp.Description("Date in YYYY-MM-DD format (default: today)")),
@@ -117,6 +148,12 @@ func addGetTimeLog(srv *server.MCPServer, s *store.Store) {
 
 		start := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 		end := start.Add(24 * time.Hour)
+
+		s, err := openStore()
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		defer s.Close()
 
 		entries, err := s.FilteredRange(start, end, project)
 		if err != nil {
@@ -156,7 +193,7 @@ func addGetTimeLog(srv *server.MCPServer, s *store.Store) {
 
 // ── get_time_stats ────────────────────────────────────────────────────────────
 
-func addGetTimeStats(srv *server.MCPServer, s *store.Store) {
+func addGetTimeStats(srv *server.MCPServer) {
 	tool := mcp.NewTool("get_time_stats",
 		mcp.WithDescription("Get aggregated time statistics over the last N days."),
 		mcp.WithNumber("days", mcp.Description("Number of days to look back (default: 7)")),
@@ -167,6 +204,12 @@ func addGetTimeStats(srv *server.MCPServer, s *store.Store) {
 		if days <= 0 {
 			days = 7
 		}
+
+		s, err := openStore()
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		defer s.Close()
 
 		entries, err := s.RecentDays(days)
 		if err != nil {
