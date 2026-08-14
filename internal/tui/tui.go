@@ -386,7 +386,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		running, _ := m.store.Running()
 		m.running = running
 		if m.cursor >= len(m.entries) {
-			m.cursor = maxInt(0, len(m.entries)-1)
+			m.cursor = max(0, len(m.entries)-1)
 		}
 		return m, nil
 
@@ -394,7 +394,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.allEntries = msg.entries
 		m.entries = filterEntries(msg.entries, m.filterQ)
 		if m.cursor >= len(m.entries) {
-			m.cursor = maxInt(0, len(m.entries)-1)
+			m.cursor = max(0, len(m.entries)-1)
 		}
 		return m, nil
 
@@ -1642,11 +1642,4 @@ func copyToClipboardCmd(text string) tea.Cmd {
 		_ = cmd.Run()
 		return nil
 	}
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
