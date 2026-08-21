@@ -342,7 +342,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
-		m.height = msg.Height
+		// -1, not msg.Height: reserves one row of slack so View() output
+		// never lands on exactly the terminal's real height with no
+		// trailing newline — a long-standing bubbletea v1 quirk
+		// (charmbracelet/bubbletea#304) that can fail to fully redraw.
+		m.height = msg.Height - 1
+		if m.height < 1 {
+			m.height = 1
+		}
 		return m, nil
 
 	case tickMsg:
@@ -1627,6 +1634,7 @@ func Run(s *store.Store) error {
 		m,
 		tea.WithAltScreen(),
 		tea.WithMouseAllMotion(),
+		tea.WithFPS(30), // default 60fps + AllMotion's every-pixel re-render can overwhelm the terminal
 	)
 	_, err := p.Run()
 	return err
