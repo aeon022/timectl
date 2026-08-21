@@ -47,6 +47,17 @@ func ResolveDBPath() (path string, shared bool, err error) {
 	return p, false, err
 }
 
+// OpenDefault resolves the default (or TIMECTL_DATA_DIR-overridden) DB path
+// and opens it — the shared open-path used by both the CLI and the MCP
+// server.
+func OpenDefault() (*Store, error) {
+	path, shared, err := ResolveDBPath()
+	if err != nil {
+		return nil, fmt.Errorf("resolve db path: %w", err)
+	}
+	return Open(path, shared)
+}
+
 // timectl opens a fresh *Store per operation rather than holding one open
 // for the process's lifetime, and flock(2) isn't reentrant within a
 // process — locks reference-counts the real OS-level lock per path so the
@@ -332,19 +343,6 @@ func (s *Store) Today() ([]models.Entry, error) {
 	now := time.Now()
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	end := start.Add(24 * time.Hour)
-	return s.Range(start, end)
-}
-
-// Week returns entries from Monday of the current week through Sunday.
-func (s *Store) Week() ([]models.Entry, error) {
-	now := time.Now()
-	weekday := int(now.Weekday())
-	if weekday == 0 {
-		weekday = 7
-	}
-	monday := now.AddDate(0, 0, -(weekday - 1))
-	start := time.Date(monday.Year(), monday.Month(), monday.Day(), 0, 0, 0, 0, now.Location())
-	end := start.AddDate(0, 0, 7)
 	return s.Range(start, end)
 }
 

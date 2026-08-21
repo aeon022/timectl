@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1366,35 +1367,13 @@ func (m model) weekView() string {
 	if len(m.weekSummaries) == 0 {
 		b.WriteString(styleMuted.Render("  No data yet.") + "\n")
 	} else {
-		var maxH float64
-		for _, ds := range m.weekSummaries {
-			h := ds.Total.Hours()
-			if h > maxH {
-				maxH = h
-			}
-		}
-		if maxH < 1 {
-			maxH = 1
-		}
+		rows, weekTotal := models.WeekBarChart(m.weekSummaries)
 
-		var weekTotal time.Duration
-		const barWidth = 24
-
-		for _, ds := range m.weekSummaries {
-			weekTotal += ds.Total
-			label := ds.Date.Format("Mon 01/02")
-			hours := ds.Total.Hours()
-			filled := int(hours / maxH * barWidth)
-			if hours > 0 && filled == 0 {
-				filled = 1
-			}
-			bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
-			dur := models.FormatDuration(ds.Total)
-
+		for _, r := range rows {
 			line := fmt.Sprintf("  %s  %s  %s",
-				label,
-				styleCyan.Render(bar),
-				styleBlue.Render(dur),
+				r.Label,
+				styleCyan.Render(r.Bar),
+				styleBlue.Render(r.Duration),
 			)
 			b.WriteString(line + "\n")
 		}
@@ -1575,7 +1554,7 @@ func buildStatsText(s *store.Store, hourlyRate float64) (string, error) {
 	sb.WriteString("\n" + styleAmber.Render("  Average day (last 14 days):") + "\n")
 	sb.WriteString(fmt.Sprintf("  %s\n", models.FormatDuration(avg)))
 
-	streak := computeStreak(daySet)
+	streak := models.ComputeStreak(daySet)
 	sb.WriteString("\n" + styleAmber.Render("  Current streak:") + "\n")
 	sb.WriteString(fmt.Sprintf("  %d day(s)\n", streak))
 
@@ -1598,31 +1577,11 @@ func topN(m map[string]time.Duration, n int) []kvPair {
 	for k, v := range m {
 		pairs = append(pairs, kvPair{k, v})
 	}
-	for i := range pairs {
-		for j := i + 1; j < len(pairs); j++ {
-			if pairs[j].v > pairs[i].v {
-				pairs[i], pairs[j] = pairs[j], pairs[i]
-			}
-		}
-	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].v > pairs[j].v })
 	if n > len(pairs) {
 		n = len(pairs)
 	}
 	return pairs[:n]
-}
-
-func computeStreak(daySet map[string]bool) int {
-	streak := 0
-	now := time.Now()
-	for {
-		day := now.Format("2006-01-02")
-		if !daySet[day] {
-			break
-		}
-		streak++
-		now = now.AddDate(0, 0, -1)
-	}
-	return streak
 }
 
 // ── Run ───────────────────────────────────────────────────────────────────────

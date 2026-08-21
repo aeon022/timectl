@@ -40,11 +40,7 @@ func Serve() error {
 }
 
 func openStore() (*store.Store, error) {
-	path, shared, err := store.ResolveDBPath()
-	if err != nil {
-		return nil, fmt.Errorf("resolve db path: %w", err)
-	}
-	return store.Open(path, shared)
+	return store.OpenDefault()
 }
 
 // ── start_timer ───────────────────────────────────────────────────────────────
@@ -246,7 +242,7 @@ func addGetTimeStats(srv *server.MCPServer) {
 			avgSec = int64(tot.Seconds()) / int64(len(dayTotals))
 		}
 
-		streak := computeStreak(daySet)
+		streak := models.ComputeStreak(daySet)
 
 		out := map[string]any{
 			"by_task":               byTask,
@@ -268,18 +264,4 @@ func jsonResult(v any) (*mcp.CallToolResult, error) {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	return mcp.NewToolResultText(string(b)), nil
-}
-
-func computeStreak(daySet map[string]bool) int {
-	streak := 0
-	now := time.Now()
-	for {
-		day := now.Format("2006-01-02")
-		if !daySet[day] {
-			break
-		}
-		streak++
-		now = now.AddDate(0, 0, -1)
-	}
-	return streak
 }

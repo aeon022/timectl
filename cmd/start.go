@@ -28,6 +28,12 @@ var startCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if startNotes != "" {
+			if err := s.UpdateNotes(entry.ID, startNotes); err != nil {
+				return err
+			}
+			entry.Notes = startNotes
+		}
 
 		proj := ""
 		if entry.Project != "" {

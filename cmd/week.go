@@ -41,34 +41,9 @@ func init() {
 }
 
 func printWeekTable(summaries []models.DaySummary) {
-	var weekTotal time.Duration
-	for _, ds := range summaries {
-		weekTotal += ds.Total
-	}
-
-	// Find max for bar scaling.
-	var maxH float64
-	for _, ds := range summaries {
-		h := ds.Total.Hours()
-		if h > maxH {
-			maxH = h
-		}
-	}
-	if maxH < 1 {
-		maxH = 1
-	}
-
-	const barWidth = 24
-	for _, ds := range summaries {
-		label := ds.Date.Format("Mon 01/02")
-		hours := ds.Total.Hours()
-		filled := int(hours / maxH * barWidth)
-		if hours > 0 && filled == 0 {
-			filled = 1
-		}
-		bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
-		dur := models.FormatDuration(ds.Total)
-		fmt.Printf("  %s  %s  %s\n", label, bar, dur)
+	rows, weekTotal := models.WeekBarChart(summaries)
+	for _, r := range rows {
+		fmt.Printf("  %s  %s  %s\n", r.Label, r.Bar, r.Duration)
 	}
 
 	fmt.Println("  " + strings.Repeat("─", 55))

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aeon022/timectl/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -43,34 +42,7 @@ var logCmd = &cobra.Command{
 			return nil
 		}
 
-		var total time.Duration
-		prevDay := ""
-		for _, e := range entries {
-			day := e.StartedAt.Format("Mon Jan 02")
-			if day != prevDay {
-				fmt.Printf("\n  %s\n", day)
-				prevDay = day
-			}
-			d := e.ComputedDuration()
-			total += d
-
-			stopStr := ""
-			if e.StoppedAt != nil {
-				stopStr = e.StoppedAt.Format("15:04")
-			} else {
-				stopStr = "     "
-			}
-
-			proj := ""
-			if e.Project != "" {
-				proj = " [" + e.Project + "]"
-			}
-
-			fmt.Printf("    %s – %s  %-7s  %s%s\n",
-				e.StartedAt.Format("15:04"), stopStr,
-				models.FormatDuration(d), e.Task, proj)
-		}
-		fmt.Printf("\n  Total: %s\n", models.FormatDuration(total))
+		printEntriesTable(entries, true)
 		return nil
 	},
 }

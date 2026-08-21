@@ -31,7 +31,12 @@ var todayCmd = &cobra.Command{
 			return printEntriesJSON(entries)
 		}
 
-		printEntriesTable(entries)
+		if len(entries) == 0 {
+			fmt.Println("  No entries today.")
+			return nil
+		}
+
+		printEntriesTable(entries, false)
 		return nil
 	},
 }
@@ -40,14 +45,22 @@ func init() {
 	todayCmd.Flags().BoolVar(&todayJSON, "json", false, "Output as JSON")
 }
 
-func printEntriesTable(entries []models.Entry) {
-	if len(entries) == 0 {
-		fmt.Println("  No entries today.")
-		return
-	}
-
+// printEntriesTable renders entries as an aligned table with a running
+// total, shared by `today` and `log`. With dayHeader false (today) entries
+// print as a flat, padded list closed by a divider; with dayHeader true
+// (log) entries are grouped under "Mon Jan 02" headers instead.
+func printEntriesTable(entries []models.Entry, dayHeader bool) {
 	var total time.Duration
+	prevDay := ""
 	for _, e := range entries {
+		if dayHeader {
+			day := e.StartedAt.Format("Mon Jan 02")
+			if day != prevDay {
+				fmt.Printf("\n  %s\n", day)
+				prevDay = day
+			}
+		}
+
 		d := e.ComputedDuration()
 		total += d
 
@@ -64,12 +77,19 @@ func printEntriesTable(entries []models.Entry) {
 			proj = " [" + e.Project + "]"
 		}
 
-		fmt.Printf("  %s – %s  %-7s  %-30s%s\n",
-			start, stop, models.FormatDuration(d), e.Task, proj)
+		if dayHeader {
+			fmt.Printf("    %s – %s  %-7s  %s%s\n", start, stop, models.FormatDuration(d), e.Task, proj)
+		} else {
+			fmt.Printf("  %s – %s  %-7s  %-30s%s\n", start, stop, models.FormatDuration(d), e.Task, proj)
+		}
 	}
 
-	fmt.Println("  " + strings.Repeat("─", 60))
-	fmt.Printf("  Total: %s\n", models.FormatDuration(total))
+	if dayHeader {
+		fmt.Printf("\n  Total: %s\n", models.FormatDuration(total))
+	} else {
+		fmt.Println("  " + strings.Repeat("─", 60))
+		fmt.Printf("  Total: %s\n", models.FormatDuration(total))
+	}
 }
 
 func printEntriesJSON(entries []models.Entry) error {
