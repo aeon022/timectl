@@ -1382,7 +1382,8 @@ func (m model) weekView() string {
 		b.WriteString(styleBlue.Render(fmt.Sprintf("  Total: %s", models.FormatDuration(weekTotal))) + "\n")
 	}
 
-	b.WriteString("\n" + styleFooter.Render("  esc/q back") + "\n")
+	m.padToFooter(&b)
+	b.WriteString(styleFooter.Render("  esc/q back") + "\n")
 	return b.String()
 }
 
@@ -1394,7 +1395,8 @@ func (m model) statsView() string {
 	} else {
 		b.WriteString(m.statsText)
 	}
-	b.WriteString("\n" + styleFooter.Render("  esc/q back") + "\n")
+	m.padToFooter(&b)
+	b.WriteString(styleFooter.Render("  esc/q back") + "\n")
 	return b.String()
 }
 
@@ -1416,8 +1418,22 @@ func (m model) taskPickView() string {
 		}
 	}
 
-	b.WriteString("\n" + styleFooter.Render("  j/k navigate · enter start timer · esc/q back") + "\n")
+	m.padToFooter(&b)
+	b.WriteString(styleFooter.Render("  j/k navigate · enter start timer · esc/q back") + "\n")
 	return b.String()
+}
+
+// padToFooter pins the trailing footer line to the bottom of the terminal
+// instead of letting it glue itself right under a short body — pads with
+// blank lines up to m.height first, same pattern mainView gets for free
+// from lipgloss's panelStyle.Height().
+func (m model) padToFooter(b *strings.Builder) {
+	if m.height <= 0 {
+		return
+	}
+	for lines := strings.Count(b.String(), "\n"); lines < m.height-1; lines++ {
+		b.WriteString("\n")
+	}
 }
 
 func (m model) helpContent() string {
