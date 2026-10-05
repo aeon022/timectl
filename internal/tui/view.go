@@ -12,9 +12,11 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/aeon022/missionctl-core/emptystate"
 	"github.com/aeon022/missionctl-core/keymap"
 	"github.com/aeon022/missionctl-core/overlay"
 	"github.com/aeon022/missionctl-core/palette"
+	"github.com/aeon022/missionctl-core/statusbar"
 	"github.com/aeon022/missionctl-core/theme"
 	"github.com/aeon022/timectl/internal/models"
 	"github.com/aeon022/timectl/internal/store"
@@ -42,7 +44,7 @@ func (m model) viewContent() string {
 		return m.taskPickView()
 	case viewHelp:
 		// inset 0: no enclosing border around the background views here.
-		return overlay.Center(m.backgroundView(), m.renderHelpPopup(), m.width, m.height, 0)
+		return overlay.CenterDim(m.backgroundView(), m.renderHelpPopup(), m.width, m.height, 0)
 	default:
 		return m.mainView()
 	}
@@ -95,7 +97,13 @@ func (m model) mainView() string {
 	case m.filterQ != "":
 		footer = styleAmber.Render("filter: /"+m.filterQ) + styleFooter.Render("  esc:clear  ?:help")
 	default:
-		footer = styleFooter.Render("n:start  T:tasks  s:stop  e:notes  d:delete  u:undo  y:copy  g:open task  /:filter  ←/→/t:day  w:week  v:stats  ?:help  q:quit")
+		// Priority order: statusbar drops the LAST hints first when narrow.
+		footer = statusbar.Hints(m.width,
+			[2]string{"n", "start"}, [2]string{"s", "stop"}, [2]string{"?", "help"}, [2]string{"q", "quit"},
+			[2]string{"T", "tasks"}, [2]string{"e", "notes"}, [2]string{"d", "delete"}, [2]string{"u", "undo"},
+			[2]string{"/", "filter"}, [2]string{"←/→/t", "day"}, [2]string{"w", "week"}, [2]string{"v", "stats"},
+			[2]string{"y", "copy"}, [2]string{"g", "open task"},
+		)
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -212,7 +220,7 @@ func (m model) renderToday(width, height int) string {
 	lines = append(lines, styleDivider.Render(strings.Repeat("─", width-4)))
 
 	if len(m.entries) == 0 {
-		lines = append(lines, "", styleMuted.Render("  No entries yet — press n to start a timer."))
+		lines = append(lines, "", emptystate.Render(0, 0, "", "No entries yet", "press n to start a timer"))
 		return strings.Join(lines, "\n")
 	}
 
@@ -408,7 +416,7 @@ func (m model) statsView() string {
 	var b strings.Builder
 	b.WriteString(styleHeader.Render("timectl — stats") + "\n\n")
 	if m.statsText == "" {
-		b.WriteString(styleMuted.Render("  Loading...") + "\n")
+		b.WriteString(emptystate.Loading(0, 0, "", "Loading…") + "\n")
 	} else {
 		b.WriteString(m.statsText)
 	}
@@ -422,7 +430,7 @@ func (m model) taskPickView() string {
 	b.WriteString(styleHeader.Render("timectl — open tasks") + "\n\n")
 
 	if m.taskList == nil {
-		b.WriteString(styleMuted.Render("  Loading...") + "\n")
+		b.WriteString(emptystate.Loading(0, 0, "", "Loading…") + "\n")
 	} else if len(m.taskList) == 0 {
 		b.WriteString(styleMuted.Render("  No open tasks found in taskctl.") + "\n")
 	} else {
