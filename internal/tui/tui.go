@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"github.com/aeon022/missionctl-core/humanize"
+	"image/color"
 	"math"
 	"os"
 	"os/exec"
@@ -11,34 +12,41 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/aeon022/missionctl-core/keymap"
 	"github.com/aeon022/missionctl-core/overlay"
 	"github.com/aeon022/missionctl-core/palette"
 	"github.com/aeon022/missionctl-core/theme"
 	"github.com/aeon022/timectl/internal/models"
 	"github.com/aeon022/timectl/internal/store"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/sahilm/fuzzy"
 )
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 
+// adaptive resolves a light/dark ANSI color pair once, at startup — v2 dropped
+// AdaptiveColor, and these package-level styles are built once, not per render.
+var adaptive = func() func(light, dark string) color.Color {
+	pick := lipgloss.LightDark(lipgloss.HasDarkBackground(os.Stdin, os.Stdout))
+	return func(light, dark string) color.Color { return pick(lipgloss.Color(light), lipgloss.Color(dark)) }
+}()
+
 var (
 	// Shared across the suite via missionctl-core/theme.
-	colorBlue   = theme.Blue
-	colorCyan   = lipgloss.AdaptiveColor{Light: "30", Dark: "51"}
-	colorGreen  = theme.Green
-	colorRed    = theme.Red
-	colorAmber  = theme.Amber
-	colorMuted  = theme.Muted
-	colorSubtle = theme.Subtle
+	colorBlue   = theme.BlueV2
+	colorCyan   = adaptive("30", "51")
+	colorGreen  = theme.GreenV2
+	colorRed    = theme.RedV2
+	colorAmber  = theme.AmberV2
+	colorMuted  = theme.MutedV2
+	colorSubtle = theme.SubtleV2
 	// selectedBg/selectedFg intentionally NOT shared — timectl's selected-row
 	// color is a deliberately different shade from the suite default.
-	selectedBg = lipgloss.AdaptiveColor{Light: "159", Dark: "23"}
-	selectedFg = lipgloss.AdaptiveColor{Light: "16", Dark: "255"}
+	selectedBg = adaptive("159", "23")
+	selectedFg = adaptive("16", "255")
 )
 
 var (
@@ -214,7 +222,7 @@ type model struct {
 func newModel(s *store.Store) model {
 	ti := textinput.New()
 	ti.CharLimit = 200
-	ti.Width = 50
+	ti.SetWidth(50)
 	goal := 8.0
 	if v := os.Getenv("TIMECTL_GOAL_HOURS"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
@@ -429,31 +437,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.errMsg = msg.err.Error()
 		return m, nil
 
-	case tea.MouseMsg:
+	case tea.MouseWheelMsg:
 		switch msg.Button {
-		case tea.MouseButtonWheelUp:
+		case tea.MouseWheelUp:
 			if m.current == viewMain && m.cursor > 0 {
 				m.cursor--
 			}
-		case tea.MouseButtonWheelDown:
+		case tea.MouseWheelDown:
 			if m.current == viewMain && m.cursor < len(m.entries)-1 {
 				m.cursor++
-			}
-		case tea.MouseButtonLeft:
-			if msg.Action != tea.MouseActionPress || m.current != viewMain {
-				return m, nil
-			}
-			if i := m.rowHitTest(msg.X, msg.Y); i >= 0 {
-				m.cursor = i
-			}
-		case tea.MouseButtonNone:
-			if msg.Action == tea.MouseActionMotion && m.current == viewMain {
-				m.hoverRow = m.rowHitTest(msg.X, msg.Y)
 			}
 		}
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.MouseClickMsg:
+		if msg.Button != tea.MouseLeft || m.current != viewMain {
+			return m, nil
+		}
+		if i := m.rowHitTest(msg.X, msg.Y); i >= 0 {
+			m.cursor = i
+		}
+		return m, nil
+
+	case tea.MouseMotionMsg:
+		if m.current == viewMain {
+			m.hoverRow = m.rowHitTest(msg.X, msg.Y)
+		}
+		return m, nil
+
+	case tea.KeyPressMsg:
 		if m.imode != modeNone {
 			return m.handleInputKey(msg)
 		}
@@ -470,7 +482,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // handleNavKey handles keys when not in input mode.
-func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleNavKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// The delete-undo toast gets the longer undoWindow instead of the
 	// usual 3s — it's also the window "u" checks below, so the message
 	// and the capability it describes expire together.
@@ -683,7 +695,7 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleTaskPickKey handles keys in the task picker view.
-func (m model) handleTaskPickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleTaskPickKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -709,7 +721,7 @@ func (m model) handleTaskPickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleInputKey handles keys while in an input prompt.
-func (m model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.imode == modeCommand {
 		closePalette := func(mm model) model {
 			mm.imode = modeNone
@@ -744,7 +756,7 @@ func (m model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			chosen := matches[m.paletteCursor]
 			m = closePalette(m)
-			replay := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(chosen.Key)}
+			replay := tea.KeyPressMsg{Text: chosen.Key, Code: []rune(chosen.Key)[0]}
 			return m.handleNavKey(replay)
 		}
 		var cmd tea.Cmd
@@ -1004,7 +1016,16 @@ func (m model) cmdStartLinked(task, project, linkedTask, linkedTaskID string) te
 
 // ── View ─────────────────────────────────────────────────────────────────────
 
-func (m model) View() string {
+func (m model) View() tea.View {
+	v := tea.NewView(m.viewContent())
+	// v1's tea.WithAltScreen()/WithMouseAllMotion() Program options are gone
+	// in v2 — they are per-View fields now.
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeAllMotion
+	return v
+}
+
+func (m model) viewContent() string {
 	switch m.current {
 	case viewWeek:
 		return m.weekView()
@@ -1149,7 +1170,7 @@ func heatCellHours(d time.Duration) string {
 	case h == 0:
 		return styleMuted.Render(b)
 	case h < 2:
-		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "30", Dark: "23"}).Render(b)
+		return lipgloss.NewStyle().Foreground(adaptive("30", "23")).Render(b)
 	case h < 4:
 		return styleCyan.Render(b)
 	default:
@@ -1256,7 +1277,7 @@ func (m model) renderToday(width, height int) string {
 
 		switch {
 		case i == m.cursor, i == m.hoverRow:
-			// Selected/hovered: plain text row so styleSelected/theme.Hover
+			// Selected/hovered: plain text row so styleSelected/theme.HoverV2
 			// fills correctly (see the comment further down about not
 			// nesting already-styled text inside a wrapping Render call).
 			rowPlain := fmt.Sprintf("%-2s%s  %-*s  [%s]  %-9s",
@@ -1270,7 +1291,7 @@ func (m model) renderToday(width, height int) string {
 			if i == m.cursor {
 				lines = append(lines, styleSelected.Width(contentW).Render(rowPlain))
 			} else {
-				lines = append(lines, theme.Hover.Width(contentW).Render(rowPlain))
+				lines = append(lines, theme.HoverV2.Width(contentW).Render(rowPlain))
 			}
 		default:
 			// Styled: build with concatenation to avoid styleNormal wrapping ANSI.
@@ -1481,7 +1502,7 @@ func (m model) openHelp() model {
 		popW = 40
 	}
 
-	vp := viewport.New(popW-6, popH-5) // border 1+1, padding(1,2) → 2 rows/4 cols; -1 row for footer
+	vp := viewport.New(viewport.WithWidth(popW-6), viewport.WithHeight(popH-5)) // border 1+1, padding(1,2) → 2 rows/4 cols; -1 row for footer
 	vp.SetContent(m.helpContent())
 
 	m.helpVP = vp
@@ -1496,7 +1517,7 @@ func (m model) openHelp() model {
 // replacing the whole screen.
 func (m model) renderHelpPopup() string {
 	footer := "esc / ?  close"
-	if m.helpVP.TotalLineCount() > m.helpVP.Height {
+	if m.helpVP.TotalLineCount() > m.helpVP.Height() {
 		footer = fmt.Sprintf("j/k scroll (%d%%)  ·  %s", int(m.helpVP.ScrollPercent()*100), footer)
 	}
 	body := m.helpVP.View() + "\n" + styleMuted.Render(footer)
@@ -1589,17 +1610,31 @@ func topN(m map[string]time.Duration, n int) []kvPair {
 	return pairs[:n]
 }
 
+// motionThrottleFilter drops MouseMotionMsg messages arriving <16ms apart.
+func motionThrottleFilter() func(tea.Model, tea.Msg) tea.Msg {
+	var lastMotion time.Time
+	return func(_ tea.Model, msg tea.Msg) tea.Msg {
+		if _, ok := msg.(tea.MouseMotionMsg); !ok {
+			return msg
+		}
+		now := time.Now()
+		if now.Sub(lastMotion) < 16*time.Millisecond {
+			return nil
+		}
+		lastMotion = now
+		return msg
+	}
+}
+
 // ── Run ───────────────────────────────────────────────────────────────────────
 
 // Run starts the TUI.
 func Run(s *store.Store) error {
 	m := newModel(s)
-	p := tea.NewProgram(
-		m,
-		tea.WithAltScreen(),
-		tea.WithMouseAllMotion(),
-		tea.WithFPS(30), // default 60fps + AllMotion's every-pixel re-render can overwhelm the terminal
-	)
+	// WithFPS(30) + motionThrottleFilter: all-motion mouse mode re-renders on every
+	// pixel of movement, which at the default 60fps can overwhelm the terminal
+	// (duplicate-content corruption seen in notectl/mailctl).
+	p := tea.NewProgram(m, tea.WithFilter(motionThrottleFilter()), tea.WithFPS(30))
 	_, err := p.Run()
 	return err
 }
