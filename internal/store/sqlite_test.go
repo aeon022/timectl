@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -132,5 +133,64 @@ func TestFormatDuration(t *testing.T) {
 	}
 	if !strings.Contains(got, "1h") || !strings.Contains(got, "30m") {
 		t.Errorf("FormatDuration(90m) = %q, want it to mention 1h and 30m", got)
+	}
+}
+
+// Stored timestamps are compared and sorted as TEXT. RFC3339Nano trims
+// trailing zeros (".1Z" > ".12Z" as text although 0.1s is earlier), so new
+// rows are written fixed-width; rows from before that must still load and
+// sort correctly against new ones.
+func TestRangeOrdersMixedOldAndNewTimestampFormats(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "timectl.db")
+	s, err := Open(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []struct{ task, started string }{
+		{"a", "2026-01-01T10:00:00.1Z"},         // old format: trimmed zeros, 0.100s
+		{"b", "2026-01-01T10:00:00.120000000Z"}, // new format, 0.120s
+		{"c", "2026-01-01T10:00:00.123Z"},       // old format, 0.123s
+		{"d", "2026-01-01T10:00:01Z"},           // old format, whole second
+	}
+	for _, r := range rows {
+		if _, err := s.db.Exec(`INSERT INTO entries (task, started_at) VALUES (?, ?)`, r.task, r.started); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A database from before the fixed-width layout: reopening must normalize it.
+	if _, err := s.db.Exec(`PRAGMA user_version = 0`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if s, err = Open(path, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	got, err := s.Range(from, from.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var order string
+	for _, e := range got {
+		order += e.Task
+	}
+	if order != "abcd" {
+		t.Errorf("order = %s, want abcd (a 0.1s < b 0.12s < c 0.123s < d 1s)", order)
+	}
+}
+
+func TestNewRowsAreWrittenFixedWidth(t *testing.T) {
+	s := testStore(t)
+	e, err := s.Start("x", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started string
+	if err := s.db.QueryRow(`SELECT started_at FROM entries WHERE id = ?`, e.ID).Scan(&started); err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`\.\d{9}(Z|[+-]\d\d:\d\d)$`).MatchString(started) {
+		t.Errorf("started_at %q: want exactly 9 fraction digits then the zone", started)
 	}
 }

@@ -15,7 +15,15 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const timeLayout = time.RFC3339Nano
+// timeLayout parses stored timestamps (tolerates any fraction length, so rows
+// written before writeLayout existed still load). writeLayout is what we
+// WRITE: fixed-width fraction, because RFC3339Nano trims trailing zeros and
+// timestamps are compared and sorted as TEXT — ".1Z" sorts after ".12Z"
+// although 0.1s is earlier.
+const (
+	timeLayout  = time.RFC3339Nano
+	writeLayout = "2006-01-02T15:04:05.000000000Z07:00"
+)
 
 // Store wraps the SQLite database.
 type Store struct {
@@ -181,7 +189,73 @@ func (s *Store) init(shared bool) error {
 	_, _ = s.db.Exec(`ALTER TABLE entries ADD COLUMN linked_task TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.db.Exec(`ALTER TABLE entries ADD COLUMN linked_task_id TEXT NOT NULL DEFAULT ''`)
 
-	return nil
+	return s.normalizeTimestamps()
+}
+
+// normalizeTimestamps rewrites rows written with the old trimmed-zero layout
+// to writeLayout, once (PRAGMA user_version 0 → 1), so TEXT ordering is right
+// across the whole table, not only for new rows. Same instant, same zone.
+func (s *Store) normalizeTimestamps() error {
+	var v int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
+		return err
+	}
+	if v >= 1 {
+		return nil
+	}
+	norm := func(in string) string {
+		t, err := time.Parse(timeLayout, in)
+		if err != nil {
+			return in // not ours / unparsable: leave it alone
+		}
+		return t.Format(writeLayout)
+	}
+	rows, err := s.db.Query(`SELECT id, started_at, stopped_at FROM entries`)
+	if err != nil {
+		return err
+	}
+	type upd struct {
+		id      int64
+		started string
+		stopped sql.NullString
+	}
+	var todo []upd
+	for rows.Next() {
+		var id int64
+		var st string
+		var sp sql.NullString
+		if err := rows.Scan(&id, &st, &sp); err != nil {
+			rows.Close()
+			return err
+		}
+		nst, nsp := norm(st), sp
+		if sp.Valid {
+			nsp.String = norm(sp.String)
+		}
+		if nst != st || nsp != sp {
+			todo = append(todo, upd{id, nst, nsp})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	for _, u := range todo {
+		if _, err := tx.Exec(`UPDATE entries SET started_at = ?, stopped_at = ? WHERE id = ?`, u.started, u.stopped, u.id); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	if _, err := tx.Exec(`PRAGMA user_version = 1`); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit()
 }
 
 // Start inserts a new running entry. Returns an error if one is already running.
@@ -205,7 +279,7 @@ func (s *Store) StartLinked(task, project, linkedTask, linkedTaskID string) (mod
 	now := time.Now()
 	res, err := s.db.Exec(
 		`INSERT INTO entries (task, project, started_at, linked_task, linked_task_id) VALUES (?, ?, ?, ?, ?)`,
-		task, project, now.Format(timeLayout), linkedTask, linkedTaskID,
+		task, project, now.Format(writeLayout), linkedTask, linkedTaskID,
 	)
 	if err != nil {
 		return models.Entry{}, fmt.Errorf("insert entry: %w", err)
@@ -296,12 +370,12 @@ func (s *Store) Stop(notes string) (models.Entry, error) {
 	if notes != "" {
 		_, err = s.db.Exec(
 			`UPDATE entries SET stopped_at = ?, notes = ? WHERE id = ?`,
-			now.Format(timeLayout), notes, running.ID,
+			now.Format(writeLayout), notes, running.ID,
 		)
 	} else {
 		_, err = s.db.Exec(
 			`UPDATE entries SET stopped_at = ? WHERE id = ?`,
-			now.Format(timeLayout), running.ID,
+			now.Format(writeLayout), running.ID,
 		)
 	}
 	if err != nil {
@@ -353,8 +427,8 @@ func (s *Store) Range(from, to time.Time) ([]models.Entry, error) {
 		   FROM entries
 		  WHERE started_at >= ? AND started_at < ?
 		  ORDER BY started_at ASC`,
-		from.Format(timeLayout),
-		to.Format(timeLayout),
+		from.Format(writeLayout),
+		to.Format(writeLayout),
 	)
 	if err != nil {
 		return nil, err
@@ -383,11 +457,11 @@ func (s *Store) Delete(id int64) error {
 func (s *Store) Restore(e models.Entry) error {
 	var stoppedAt any
 	if e.StoppedAt != nil {
-		stoppedAt = e.StoppedAt.Format(timeLayout)
+		stoppedAt = e.StoppedAt.Format(writeLayout)
 	}
 	_, err := s.db.Exec(
 		`INSERT INTO entries (id, task, project, started_at, stopped_at, notes, linked_task, linked_task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		e.ID, e.Task, e.Project, e.StartedAt.Format(timeLayout), stoppedAt, e.Notes, e.LinkedTask, e.LinkedTaskID,
+		e.ID, e.Task, e.Project, e.StartedAt.Format(writeLayout), stoppedAt, e.Notes, e.LinkedTask, e.LinkedTaskID,
 	)
 	return err
 }
@@ -462,8 +536,8 @@ func (s *Store) FilteredRange(from, to time.Time, project string) ([]models.Entr
 		   FROM entries
 		  WHERE started_at >= ? AND started_at < ? AND project = ?
 		  ORDER BY started_at ASC`,
-		from.Format(timeLayout),
-		to.Format(timeLayout),
+		from.Format(writeLayout),
+		to.Format(writeLayout),
 		project,
 	)
 	if err != nil {
