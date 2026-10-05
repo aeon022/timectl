@@ -67,11 +67,11 @@ func printWeekTable(summaries []models.DaySummary) {
 
 func printWeekJSON(summaries []models.DaySummary) error {
 	type daySummaryJSON struct {
-		Date          string            `json:"date"`
-		TotalSeconds  int               `json:"total_seconds"`
-		TotalHuman    string            `json:"total_human"`
-		ByTask        map[string]int    `json:"by_task"`
-		EntryCount    int               `json:"entry_count"`
+		Date         string         `json:"date"`
+		TotalSeconds int            `json:"total_seconds"`
+		TotalHuman   string         `json:"total_human"`
+		ByTask       map[string]int `json:"by_task"`
+		EntryCount   int            `json:"entry_count"`
 	}
 
 	var out []daySummaryJSON
