@@ -31,6 +31,10 @@ const (
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 
+// focusReloadAfter is how stale the entries must be before a window-focus
+// event reloads them.
+const focusReloadAfter = 5 * time.Second
+
 func (m model) Init() tea.Cmd {
 	return tea.Batch(doRefresh(m.store), tick(), cmdLoadHeat(m.store), idleCheckTick())
 }
@@ -168,7 +172,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusTime = time.Now()
 		return m, doRefresh(m.store)
 
+	case tea.FocusMsg:
+		// Window regained focus: reload stale entries (a timer started via the
+		// CLI/MCP shows up) — but only while browsing the main view, never
+		// during input/confirm/palette, and not on every focus flicker.
+		if m.current != viewMain || m.imode != modeNone || time.Since(m.lastLoad) < focusReloadAfter {
+			return m, nil
+		}
+		return m, doRefresh(m.store)
+
 	case refreshMsg:
+		m.lastLoad = time.Now()
 		var entries []models.Entry
 		var err error
 		if m.browseDate.IsZero() {

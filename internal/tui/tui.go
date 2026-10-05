@@ -44,6 +44,7 @@ type model struct {
 
 	entries       []models.Entry // filtered view of allEntries
 	allEntries    []models.Entry
+	lastLoad      time.Time // when refreshMsg last reloaded the entries (focus reload staleness)
 	filterQ       string
 	running       *models.Entry
 	cursor        int
