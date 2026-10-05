@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/aeon022/missionctl-core/humanize"
 	"math"
 	"os"
 	"os/exec"
@@ -167,18 +168,18 @@ type model struct {
 	height  int
 	current viewKind
 
-	entries    []models.Entry // filtered view of allEntries
-	allEntries []models.Entry
-	filterQ    string
-	running    *models.Entry
-	cursor     int
-	hoverRow   int // m.entries index under the mouse cursor, -1 when none
-	imode      inputMode
-	input      textinput.Model
+	entries       []models.Entry // filtered view of allEntries
+	allEntries    []models.Entry
+	filterQ       string
+	running       *models.Entry
+	cursor        int
+	hoverRow      int // m.entries index under the mouse cursor, -1 when none
+	imode         inputMode
+	input         textinput.Model
 	paletteCursor int // index into the filtered palette command matches, valid while imode == modeCommand
-	errMsg     string
-	statusMsg  string // confirmation text (e.g. "Copied to clipboard"), cleared 3s after statusTime on the next keypress — same lazy pattern budgetctl/mailctl/notectl/calctl use
-	statusTime time.Time
+	errMsg        string
+	statusMsg     string // confirmation text (e.g. "Copied to clipboard"), cleared 3s after statusTime on the next keypress — same lazy pattern budgetctl/mailctl/notectl/calctl use
+	statusTime    time.Time
 
 	// undo: "u" within undoWindow of a delete restores the deleted entry —
 	// same pattern and window taskctl uses for its own delete-undo.
@@ -903,18 +904,6 @@ func highlightMatches(s string, idxs []int, base lipgloss.Style) string {
 	return b.String()
 }
 
-// truncate shortens s to at most n runes, appending "…" if it had to cut.
-func truncate(s string, n int) string {
-	runes := []rune(s)
-	if len(runes) <= n {
-		return s
-	}
-	if n <= 1 {
-		return "…"
-	}
-	return string(runes[:n-1]) + "…"
-}
-
 // ── Commands ─────────────────────────────────────────────────────────────────
 
 func (m model) cmdStart(task, project string) tea.Cmd {
@@ -1250,7 +1239,7 @@ func (m model) renderToday(width, height int) string {
 			taskDisplay = e.Task + " → " + e.LinkedTask
 		}
 		matchIdx := fuzzyMatchIndexes(m.filterQ, taskDisplay)
-		task := truncate(taskDisplay, taskW)
+		task := humanize.Truncate(taskDisplay, taskW)
 
 		// Duration bar.
 		filled := int(float64(d) / float64(maxDur) * float64(barW))

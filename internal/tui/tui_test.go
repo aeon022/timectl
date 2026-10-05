@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/aeon022/missionctl-core/humanize"
 	"strings"
 	"testing"
 	"time"
@@ -168,7 +169,7 @@ func TestHighlightMatches_NoMatchRendersPlain(t *testing.T) {
 }
 
 func TestTruncate_DoesNotSplitMultiByteRunes(t *testing.T) {
-	got := truncate("Überstunden Projekt", 6)
+	got := humanize.Truncate("Überstunden Projekt", 6)
 	if !strings.Contains(got, "Ü") {
 		t.Errorf("expected the leading umlaut to survive truncation, got %q", got)
 	}
