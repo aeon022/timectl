@@ -199,6 +199,20 @@ get_time_stats with days=30
 
 ---
 
+## Recent changes (October 2026)
+
+- **Window focus.** When the terminal window regains focus, the list reloads from the local database — at most every 5 seconds, and only while you are just browsing (never while a form, editor, search, palette or confirmation is open, so nothing you are typing is lost). Terminals that don't report focus events simply never trigger it. A running timer keeps ticking either way — its elapsed time is computed from its start time.
+
+- **Clipboard.** `y` copies the selected entry's task — now through OSC 52 as well as `pbcopy`, so it also works over SSH and inside tmux (your terminal must allow OSC 52; locally `pbcopy` still does the job).
+
+- **Footer and empty states.** The key-hint footer is the suite-wide one: it never wraps and drops the least important hints first on narrow terminals. Empty lists and loading screens show a short message with a hint what to press.
+
+- **Fixed-width timestamps.** Timestamps are now written with a fixed number of fractional digits. The old shortened format could sort entries recorded within the same second in the wrong order. Existing rows are converted once when the database is first opened — nothing to do. If another machine still runs an older timectl against the same synced database, it will write the old format again, so update all machines.
+
+- The TUI now runs on Bubble Tea v2; key bindings are unchanged.
+
+---
+
 ## Architecture
 
 ```
