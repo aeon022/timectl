@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/aeon022/missionctl-core/activity"
 	"os"
 	"path/filepath"
 	"sync"
@@ -286,6 +287,7 @@ func (s *Store) StartLinked(task, project, linkedTask, linkedTaskID string) (mod
 	}
 
 	id, _ := res.LastInsertId()
+	activity.Log("timectl", "started", task)
 	return models.Entry{
 		ID:           id,
 		Task:         task,
@@ -382,6 +384,7 @@ func (s *Store) Stop(notes string) (models.Entry, error) {
 		return models.Entry{}, fmt.Errorf("stop entry: %w", err)
 	}
 
+	activity.Log("timectl", "stopped", running.Task)
 	running.StoppedAt = &now
 	running.Duration = now.Sub(running.StartedAt)
 	if notes != "" {
