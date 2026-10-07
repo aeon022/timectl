@@ -347,3 +347,81 @@ func TestStatsTextUsesCompactDurations(t *testing.T) {
 }
 
 func stripANSI(s string) string { return regexp.MustCompile("\x1b\\[[0-9;]*m").ReplaceAllString(s, "") }
+
+// secondaryViews builds every non-main view, so one table drives the chrome
+// tests: header, constant height, nothing wider than the terminal, and a
+// one-line footer with an "esc" hint.
+func secondaryViews(m model) map[string]model {
+	week := m
+	week.current = viewWeek
+	now := time.Now()
+	for i := 0; i < 7; i++ {
+		week.weekSummaries = append(week.weekSummaries, models.DaySummary{Date: now.AddDate(0, 0, i-3), Total: time.Duration(i) * time.Hour})
+	}
+	stats := m
+	stats.current = viewStats
+	stats.statsText = "  Top tasks:\n  1. a long task name here   2h\n  2. b   1h 05m"
+	pick := m
+	pick.current = viewTaskPick
+	pick.taskList = nil
+	help := m.openHelp()
+	helpFromWeek := week.openHelp()
+	return map[string]model{"week": week, "stats": stats, "taskpick": pick, "help": help, "help-over-week": helpFromWeek}
+}
+
+func TestSecondaryViewsShareTheSameChrome(t *testing.T) {
+	for _, w := range []int{40, 60, 80, 100, 140, 170} {
+		for _, h := range []int{24, 30, 36} {
+			base := layoutModel(t, 5, true, w, h)
+			for name, m := range secondaryViews(base) {
+				lines := textLines(m)
+				if len(lines) != m.height {
+					t.Errorf("%s %dx%d: %d lines, want constant %d", name, w, h, len(lines), m.height)
+				}
+				for i, l := range lines {
+					if lw := lipgloss.Width(l); lw > w {
+						t.Errorf("%s %dx%d: line %d is %d wide: %q", name, w, h, i, lw, l)
+						break
+					}
+				}
+				text := tuitest.Text(m)
+				if strings.HasPrefix(name, "help") {
+					// a modal popup over the previous view: it carries its own close hint
+					if !strings.Contains(text, "esc / ?  close") && !strings.Contains(text, "scroll") {
+						t.Errorf("%s %dx%d: help popup has no close hint:\n%s", name, w, h, text)
+					}
+					continue
+				}
+				if !strings.Contains(lines[0], "timectl") {
+					t.Errorf("%s %dx%d: no header line: %q", name, w, h, lines[0])
+				}
+				// the footer is exactly one line: the last non-empty line holds an esc hint
+				last := ""
+				for i := len(lines) - 1; i >= 0; i-- {
+					if strings.TrimSpace(lines[i]) != "" {
+						last = lines[i]
+						break
+					}
+				}
+				if !strings.Contains(strings.ToLower(last), "esc") {
+					t.Errorf("%s %dx%d: footer has no esc hint: %q\n%s", name, w, h, last, text)
+				}
+			}
+		}
+	}
+}
+
+func TestHelpPopupIsAPanelAndScrolls(t *testing.T) {
+	m := layoutModel(t, 3, false, 110, 30).openHelp()
+	text := tuitest.Text(m)
+	if !strings.Contains(text, "╭─ Help") {
+		t.Errorf("help should be a titled ui.Panel:\n%s", text)
+	}
+	if !strings.Contains(text, "esc / ?  close") && !strings.Contains(text, "scroll") {
+		t.Errorf("help footer missing:\n%s", text)
+	}
+	m2, _ := tuitest.Keys(m, "j", "j")
+	if tuitest.Text(m2) == "" {
+		t.Error("scrolling must keep rendering")
+	}
+}

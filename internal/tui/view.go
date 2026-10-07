@@ -8,7 +8,6 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/aeon022/missionctl-core/keymap"
 	"github.com/aeon022/missionctl-core/overlay"
 	"github.com/aeon022/missionctl-core/palette"
@@ -148,7 +147,7 @@ func (m model) openHelp() model {
 		popW = 40
 	}
 
-	vp := viewport.New(viewport.WithWidth(popW-6), viewport.WithHeight(popH-5)) // border 1+1, padding(1,2) → 2 rows/4 cols; -1 row for footer
+	vp := viewport.New(viewport.WithWidth(popW-4), viewport.WithHeight(popH-3)) // ui.Panel: border 2 rows/cols + 1 left pad; -1 row for the footer line
 	vp.SetContent(m.helpContent())
 
 	m.helpVP = vp
@@ -167,12 +166,7 @@ func (m model) renderHelpPopup() string {
 		footer = fmt.Sprintf("j/k scroll (%d%%)  ·  %s", int(m.helpVP.ScrollPercent()*100), footer)
 	}
 	body := m.helpVP.View() + "\n" + styleMuted.Render(footer)
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorBlue).
-		Padding(1, 2).
-		Width(m.helpPopW).
-		Render(body)
+	return ui.Panel(m.helpPopW, m.helpPopH, "Help", body, true)
 }
 
 // ── Stats builder ─────────────────────────────────────────────────────────────

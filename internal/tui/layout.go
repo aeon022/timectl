@@ -517,5 +517,5 @@ func (m model) taskPickView() string {
 		}
 	}
 	return m.framed("open tasks", "Open tasks · taskctl", strings.Join(lines, "\n"),
-		[2]string{"enter", "start timer"}, [2]string{"j/k", "navigate"}, [2]string{"esc", "back"})
+		[2]string{"esc", "back"}, [2]string{"enter", "start timer"}, [2]string{"j/k", "navigate"})
 }
