@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/aeon022/missionctl-core/palette"
+	"github.com/aeon022/missionctl-core/ui"
 	"github.com/aeon022/timectl/internal/models"
 	"github.com/aeon022/timectl/internal/store"
 	"github.com/sahilm/fuzzy"
@@ -168,7 +169,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmdAutoStopIdle(m.store), idleCheckTick())
 
 	case idleAutoStoppedMsg:
-		m.statusMsg = fmt.Sprintf("Timer auto-stopped — idle %s", models.FormatDuration(idleThreshold()))
+		m.statusMsg = fmt.Sprintf("Timer auto-stopped — idle %s", ui.Duration(idleThreshold()))
 		m.statusTime = time.Now()
 		return m, doRefresh(m.store)
 

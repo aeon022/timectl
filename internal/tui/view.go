@@ -2,22 +2,17 @@ package tui
 
 import (
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/aeon022/missionctl-core/humanize"
-
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/aeon022/missionctl-core/emptystate"
 	"github.com/aeon022/missionctl-core/keymap"
 	"github.com/aeon022/missionctl-core/overlay"
 	"github.com/aeon022/missionctl-core/palette"
-	"github.com/aeon022/missionctl-core/statusbar"
-	"github.com/aeon022/missionctl-core/theme"
+	"github.com/aeon022/missionctl-core/ui"
 	"github.com/aeon022/timectl/internal/models"
 	"github.com/aeon022/timectl/internal/store"
 )
@@ -50,296 +45,9 @@ func (m model) viewContent() string {
 	}
 }
 
-// heatmapPanelW is the heatmap (left) panel's fixed outer width — shared
-// with rowHitTest so the entry list's screen X-offset can't drift from
-// what mainView actually renders.
-const heatmapPanelW = 30
-
 // undoWindow is how long after a delete "u" still restores it — same
 // duration taskctl uses for its own delete-undo.
 const undoWindow = 5 * time.Second
-
-func (m model) mainView() string {
-	w, h := m.width, m.height
-	if w < 40 {
-		w = 80
-	}
-	if h < 20 {
-		h = 24
-	}
-
-	heatW := heatmapPanelW
-	rightW := w - heatW - 6
-	if rightW < 20 {
-		rightW = 20
-	}
-
-	panelH := h - 6
-	if m.imode == modeCommand {
-		// The palette's own footer block grows past the usual single input
-		// line (up to 6 match rows) — shrink the fixed-height panels above
-		// it by the same amount so the whole frame still fits the terminal
-		// instead of pushing the header off the top.
-		panelH -= 7
-	}
-	left := panelStyle.Width(heatW).Height(panelH).Render(m.renderHeatmap())
-	right := panelStyle.Width(rightW).Height(panelH).Render(m.renderToday(rightW, panelH))
-	panels := lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right)
-
-	var footer string
-	switch {
-	case m.imode != modeNone:
-		footer = m.renderInput()
-	case m.errMsg != "":
-		footer = styleRed.Render("Error: " + m.errMsg)
-	case m.statusMsg != "":
-		footer = styleGreen.Render("✓ " + m.statusMsg)
-	case m.filterQ != "":
-		footer = styleAmber.Render("filter: /"+m.filterQ) + styleFooter.Render("  esc:clear  ?:help")
-	default:
-		// Priority order: statusbar drops the LAST hints first when narrow.
-		footer = statusbar.Hints(m.width,
-			[2]string{"n", "start"}, [2]string{"s", "stop"}, [2]string{"?", "help"}, [2]string{"q", "quit"},
-			[2]string{"T", "tasks"}, [2]string{"e", "notes"}, [2]string{"d", "delete"}, [2]string{"u", "undo"},
-			[2]string{"/", "filter"}, [2]string{"←/→/t", "day"}, [2]string{"w", "week"}, [2]string{"v", "stats"},
-			[2]string{"y", "copy"}, [2]string{"g", "open task"},
-		)
-	}
-
-	return lipgloss.JoinVertical(lipgloss.Left,
-		styleHeader.Render("timectl — today"),
-		panels,
-		footer,
-	)
-}
-
-// rowHitTest returns the m.entries index at screen position (x, y), or -1
-// if the click missed. Entries have no scroll window (renderToday appends
-// every entry unconditionally) and no section headers, so the mapping is
-// just a fixed offset: header line(1) + today panel's top border(1) +
-// renderToday's own 2-line preamble (idle/running or date-browse line,
-// then a divider — always exactly 2 lines either way) = row 4. x must
-// land inside the today (right) panel, past the heatmap panel + gap.
-func (m model) rowHitTest(x, y int) int {
-	if x < heatmapPanelW+2 {
-		return -1
-	}
-	idx := y - 4
-	if idx < 0 || idx >= len(m.entries) {
-		return -1
-	}
-	return idx
-}
-
-func (m model) renderHeatmap() string {
-	today := time.Now()
-	totalMap := map[string]time.Duration{}
-	for _, d := range m.heatData {
-		totalMap[d.date.Format("2006-01-02")] = d.total
-	}
-
-	days := make([]time.Time, 30)
-	for i := range days {
-		days[29-i] = today.AddDate(0, 0, -i)
-	}
-
-	cells := make([]string, int(days[0].Weekday()))
-	for i := range cells {
-		cells[i] = "  "
-	}
-	for _, d := range days {
-		cells = append(cells, heatCellHours(totalMap[d.Format("2006-01-02")]))
-	}
-	for len(cells)%7 != 0 {
-		cells = append(cells, "  ")
-	}
-
-	var lines []string
-	lines = append(lines, styleMuted.Render("last 30 days"))
-	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("S M T W T F S"))
-	for i := 0; i < len(cells); i += 7 {
-		lines = append(lines, strings.Join(cells[i:i+7], " "))
-	}
-
-	// Today total + streak.
-	var todayTotal time.Duration
-	for _, e := range m.entries {
-		todayTotal += e.ComputedDuration()
-	}
-	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("today"))
-	if todayTotal > 0 {
-		lines = append(lines, styleCyan.Render(models.FormatDuration(todayTotal)))
-	} else {
-		lines = append(lines, styleMuted.Render("nothing yet"))
-	}
-
-	return strings.Join(lines, "\n")
-}
-
-func heatCellHours(d time.Duration) string {
-	b := "█"
-	h := d.Hours()
-	switch {
-	case h == 0:
-		return styleMuted.Render(b)
-	case h < 2:
-		return lipgloss.NewStyle().Foreground(adaptive("30", "23")).Render(b)
-	case h < 4:
-		return styleCyan.Render(b)
-	default:
-		return styleCyan.Bold(true).Render(b)
-	}
-}
-
-func (m model) renderToday(width, height int) string {
-	var lines []string
-
-	// Date header when browsing past days.
-	if !m.browseDate.IsZero() {
-		label := styleAmber.Render(m.browseDate.Format("Mon Jan 02"))
-		lines = append(lines, " "+label+styleMuted.Render("  ← prev · → next · t today")+" ")
-	}
-
-	// Header: running timer or idle (only relevant for today).
-	if m.running != nil && m.browseDate.IsZero() {
-		spins := [4]string{"⠋", "⠙", "⠹", "⠸"}
-		spin := spins[m.animStep%4]
-		elapsed := models.FormatDuration(m.running.ComputedDuration())
-		proj := ""
-		if m.running.Project != "" {
-			proj = " (" + m.running.Project + ")"
-		}
-		lines = append(lines,
-			styleRunning.Render(fmt.Sprintf("▶ %s%s", m.running.Task, proj))+
-				"  "+styleMuted.Render(elapsed)+"  "+styleAmber.Render(spin))
-	} else if m.browseDate.IsZero() {
-		lines = append(lines, styleMuted.Render("No timer running"))
-	}
-	lines = append(lines, styleDivider.Render(strings.Repeat("─", width-4)))
-
-	if len(m.entries) == 0 {
-		lines = append(lines, "", emptystate.Render(0, 0, "", "No entries yet", "press n to start a timer"))
-		return strings.Join(lines, "\n")
-	}
-
-	// Compute max duration for bar scaling.
-	var maxDur time.Duration
-	for _, e := range m.entries {
-		if d := e.ComputedDuration(); d > maxDur {
-			maxDur = d
-		}
-	}
-	if maxDur == 0 {
-		maxDur = time.Second
-	}
-
-	// Row layout (manual 1-space padding on each side). rowPlain's width
-	// must land on contentW-2, not contentW: it gets fed through
-	// styleSelected.Width(contentW).Render(...) for the cursor row, and
-	// styleSelected also carries Padding(0, 1) — 2 columns reserved INSIDE
-	// that Width() budget for its own padding. Undercounting either the
-	// literal separators in the "%-2s%s  %-*s  [%s]  %-9s" format string
-	// below, or this padding, makes rowPlain wider than the space actually
-	// left for content, and lipgloss word-wraps the overflow onto a second
-	// line. Found while adding fuzzy-search highlighting to this same row,
-	// verified with a forced-ANSI render (not visible in plain-text output).
-	// contentW = width - 2
-	// fixed = indicator(2) + time(5) + sep(2) + "  ["(3) + bar(12) + "]  "(3) + dur(9) + padding(2) = 38
-	contentW := width - 2
-	barW := 12
-	fixed := 2 /*indicator*/ + 5 /*time*/ + 2 /*sep*/ + 3 /*"  ["*/ + barW + 3 /*"]  "*/ + 9 /*dur*/ + 2 /*styleSelected Padding(0,1)*/
-	taskW := contentW - fixed
-	if taskW < 6 {
-		taskW = 6
-	}
-
-	var total time.Duration
-	for i, e := range m.entries {
-		d := e.ComputedDuration()
-		total += d
-
-		// Indicator.
-		indicator := "  "
-		if e.IsRunning() {
-			indicator = styleGreen.Render("▶") + " "
-		}
-
-		// Start time.
-		startStr := e.StartedAt.Format("15:04")
-
-		// Task name — truncate and pad; append linked task indicator if present.
-		taskDisplay := e.Task
-		if e.LinkedTask != "" {
-			taskDisplay = e.Task + " → " + e.LinkedTask
-		}
-		matchIdx := fuzzyMatchIndexes(m.filterQ, taskDisplay)
-		task := humanize.Truncate(taskDisplay, taskW)
-
-		// Duration bar.
-		filled := int(float64(d) / float64(maxDur) * float64(barW))
-		if d > 0 && filled == 0 {
-			filled = 1
-		}
-		barPlain := strings.Repeat("█", filled) + strings.Repeat("░", barW-filled)
-		barStyled := styleCyan.Render(barPlain)
-
-		durStr := models.FormatDuration(d)
-		if len(durStr) > 9 {
-			durStr = durStr[:9]
-		}
-
-		switch {
-		case i == m.cursor, i == m.hoverRow:
-			// Selected/hovered: plain text row so styleSelected/theme.HoverV2
-			// fills correctly (see the comment further down about not
-			// nesting already-styled text inside a wrapping Render call).
-			rowPlain := fmt.Sprintf("%-2s%s  %-*s  [%s]  %-9s",
-				func() string {
-					if e.IsRunning() {
-						return "▶ "
-					}
-					return "  "
-				}(),
-				startStr, taskW, task, barPlain, durStr)
-			if i == m.cursor {
-				lines = append(lines, styleSelected.Width(contentW).Render(rowPlain))
-			} else {
-				lines = append(lines, theme.HoverV2.Width(contentW).Render(rowPlain))
-			}
-		default:
-			// Styled: build with concatenation to avoid styleNormal wrapping ANSI.
-			// Highlight first (per-character, self-contained ANSI), THEN pad
-			// via a plain (colorless) Width() — padding the already-styled
-			// string with fmt's "%-*s" would count escape bytes as width and
-			// misalign the column.
-			taskCol := lipgloss.NewStyle().Width(taskW).Render(highlightMatches(task, matchIdx, styleMuted))
-			row := " " + indicator + startStr + "  " +
-				taskCol +
-				"  [" + barStyled + "]  " +
-				styleMuted.Render(durStr) + " "
-			lines = append(lines, row)
-		}
-	}
-
-	lines = append(lines, styleDivider.Render(strings.Repeat("─", width-4)))
-	lines = append(lines, " "+styleBlue.Render("Total: "+models.FormatDuration(total))+" ")
-
-	if m.goalHours > 0 && m.browseDate.IsZero() {
-		const goalBarW = 20
-		pct := math.Min(1.0, total.Hours()/m.goalHours)
-		filled := int(pct * goalBarW)
-		bar := strings.Repeat("█", filled) + strings.Repeat("░", goalBarW-filled)
-		goalTotal := time.Duration(m.goalHours * float64(time.Hour))
-		goalLine := " " + styleMuted.Render("goal  [") + styleCyan.Render(bar) +
-			styleMuted.Render("]  ") + styleCyan.Render(models.FormatDuration(total)) +
-			styleMuted.Render(" / "+models.FormatDuration(goalTotal)) + " "
-		lines = append(lines, goalLine)
-	}
-
-	return strings.Join(lines, "\n")
-}
 
 func (m model) renderInput() string {
 	if m.imode == modeCommand {
@@ -382,83 +90,6 @@ func (m model) renderPaletteBlock() string {
 		}
 	}
 	return strings.Join(lines, "\n")
-}
-
-func (m model) weekView() string {
-	var b strings.Builder
-
-	b.WriteString(styleHeader.Render("timectl — this week") + "\n\n")
-
-	if len(m.weekSummaries) == 0 {
-		b.WriteString(styleMuted.Render("  No data yet.") + "\n")
-	} else {
-		rows, weekTotal := models.WeekBarChart(m.weekSummaries)
-
-		for _, r := range rows {
-			line := fmt.Sprintf("  %s  %s  %s",
-				r.Label,
-				styleCyan.Render(r.Bar),
-				styleBlue.Render(r.Duration),
-			)
-			b.WriteString(line + "\n")
-		}
-
-		b.WriteString(styleDivider.Render("  "+strings.Repeat("─", 55)) + "\n")
-		b.WriteString(styleBlue.Render(fmt.Sprintf("  Total: %s", models.FormatDuration(weekTotal))) + "\n")
-	}
-
-	m.padToFooter(&b)
-	b.WriteString(styleFooter.Render("  esc/q back") + "\n")
-	return b.String()
-}
-
-func (m model) statsView() string {
-	var b strings.Builder
-	b.WriteString(styleHeader.Render("timectl — stats") + "\n\n")
-	if m.statsText == "" {
-		b.WriteString(emptystate.Loading(0, 0, "", "Loading…") + "\n")
-	} else {
-		b.WriteString(m.statsText)
-	}
-	m.padToFooter(&b)
-	b.WriteString(styleFooter.Render("  esc/q back") + "\n")
-	return b.String()
-}
-
-func (m model) taskPickView() string {
-	var b strings.Builder
-	b.WriteString(styleHeader.Render("timectl — open tasks") + "\n\n")
-
-	if m.taskList == nil {
-		b.WriteString(emptystate.Loading(0, 0, "", "Loading…") + "\n")
-	} else if len(m.taskList) == 0 {
-		b.WriteString(styleMuted.Render("  No open tasks found in taskctl.") + "\n")
-	} else {
-		for i, t := range m.taskList {
-			if i == m.taskCursor {
-				b.WriteString(styleSelected.Render("  "+t.Title) + "\n")
-			} else {
-				b.WriteString("  " + styleMuted.Render(t.Title) + "\n")
-			}
-		}
-	}
-
-	m.padToFooter(&b)
-	b.WriteString(styleFooter.Render("  j/k navigate · enter start timer · esc/q back") + "\n")
-	return b.String()
-}
-
-// padToFooter pins the trailing footer line to the bottom of the terminal
-// instead of letting it glue itself right under a short body — pads with
-// blank lines up to m.height first, same pattern mainView gets for free
-// from lipgloss's panelStyle.Height().
-func (m model) padToFooter(b *strings.Builder) {
-	if m.height <= 0 {
-		return
-	}
-	for lines := strings.Count(b.String(), "\n"); lines < m.height-1; lines++ {
-		b.WriteString("\n")
-	}
 }
 
 func (m model) helpContent() string {
@@ -572,7 +203,7 @@ func buildStatsText(s *store.Store, hourlyRate float64) (string, error) {
 
 	sb.WriteString(styleAmber.Render("  Top tasks (last 14 days):") + "\n")
 	for i, kv := range topN(taskTotals, 5) {
-		sb.WriteString(fmt.Sprintf("  %d. %-28s %s\n", i+1, kv.k, models.FormatDuration(kv.v)))
+		sb.WriteString(fmt.Sprintf("  %d. %-28s %s\n", i+1, kv.k, ui.Duration(kv.v)))
 	}
 
 	sb.WriteString("\n" + styleAmber.Render("  Top projects:") + "\n")
@@ -581,7 +212,7 @@ func buildStatsText(s *store.Store, hourlyRate float64) (string, error) {
 		sb.WriteString(styleMuted.Render("  (none tagged)") + "\n")
 	}
 	for i, kv := range topProjs {
-		sb.WriteString(fmt.Sprintf("  %d. %-28s %s\n", i+1, kv.k, models.FormatDuration(kv.v)))
+		sb.WriteString(fmt.Sprintf("  %d. %-28s %s\n", i+1, kv.k, ui.Duration(kv.v)))
 	}
 
 	var totalDur time.Duration
@@ -593,7 +224,7 @@ func buildStatsText(s *store.Store, hourlyRate float64) (string, error) {
 		avg = totalDur / time.Duration(len(dayTotals))
 	}
 	sb.WriteString("\n" + styleAmber.Render("  Average day (last 14 days):") + "\n")
-	sb.WriteString(fmt.Sprintf("  %s\n", models.FormatDuration(avg)))
+	sb.WriteString(fmt.Sprintf("  %s\n", ui.Duration(avg)))
 
 	streak := models.ComputeStreak(daySet)
 	sb.WriteString("\n" + styleAmber.Render("  Current streak:") + "\n")
