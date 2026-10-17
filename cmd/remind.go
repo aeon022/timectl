@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/aeon022/missionctl-core/applescript"
 	"os/exec"
 	"strings"
 
@@ -47,7 +48,7 @@ running every 15-30 minutes.`,
 		title := "Timer still running"
 		body := fmt.Sprintf("%s — %s", task, models.FormatDuration(elapsed))
 
-		script := fmt.Sprintf(`display notification %q with title %q`, body, title)
+		script := fmt.Sprintf(`display notification "%s" with title "%s"`, applescript.EscapeLine(body), applescript.EscapeLine(title))
 		out, err := exec.Command("osascript", "-e", script).CombinedOutput()
 		if err != nil {
 			fmt.Printf("Reminder: %s — %s\n", title, body)
