@@ -242,7 +242,7 @@ func (m model) renderToday(width, height int) string {
 	}
 	pre := len(lines)
 	if len(m.entries) == 0 {
-		lines = append(lines, "", emptystate.Render(0, 0, "", "No entries yet", "press n to start a timer"))
+		lines = append(lines, "", emptystate.Render(0, 0, "", "Welcome to timectl", timerOnboarding()))
 		return strings.Join(lines, "\n")
 	}
 	var maxDur, total time.Duration
@@ -518,4 +518,14 @@ func (m model) taskPickView() string {
 	}
 	return m.framed("open tasks", "Open tasks · taskctl", strings.Join(lines, "\n"),
 		[2]string{"esc", "back"}, [2]string{"enter", "start timer"}, [2]string{"j/k", "navigate"})
+}
+
+// timerOnboarding is the first-run hint of an empty day: what to try first.
+func timerOnboarding() string {
+	return strings.Join([]string{
+		"○  n   start your first timer",
+		"○  T   pick an open taskctl task",
+		"○  :   open the command palette",
+		"○  C   pick a colour theme",
+	}, "\n")
 }

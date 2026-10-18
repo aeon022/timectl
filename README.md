@@ -63,6 +63,7 @@ timectl
 |---|---|
 | `n` | Start new timer (prompts for task) |
 | `s` | Stop running timer |
+| `C` | Next colour theme — switches live and is saved for the whole suite |
 | `j` / `k` | Navigate entries |
 | `d` | Delete selected entry (confirm y/n) |
 | `e` | Edit notes on selected entry |

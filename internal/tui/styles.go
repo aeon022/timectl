@@ -20,68 +20,42 @@ var adaptive = func() func(light, dark string) color.Color {
 }()
 
 var (
-	// Shared across the suite via missionctl-core/theme.
-	colorBlue   = theme.BlueV2
-	colorCyan   = adaptive("30", "51")
-	colorGreen  = theme.GreenV2
-	colorRed    = theme.RedV2
-	colorAmber  = theme.AmberV2
-	colorMuted  = theme.MutedV2
-	colorSubtle = theme.SubtleV2
+	// Shared across the suite via missionctl-core/theme. Rebuilt by refreshStyles when the theme changes.
+	colorBlue, colorGreen, colorRed, colorAmber, colorMuted, colorSubtle color.Color
+	colorCyan                                                            = adaptive("30", "51")
 	// selectedBg/selectedFg intentionally NOT shared — timectl's selected-row
 	// color is a deliberately different shade from the suite default.
 	selectedBg = adaptive("159", "23")
 	selectedFg = adaptive("16", "255")
+
+	styleHeader, styleRunning, styleFooter, styleSelected, styleNormal, styleDivider lipgloss.Style
+	styleAmber, styleRed, styleBlue, styleMuted, styleGreen, panelStyle, styleCyan   lipgloss.Style
 )
 
-var (
-	styleHeader = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorBlue).
-			Padding(0, 1)
+func init() {
+	refreshStyles()
+	theme.OnChange(refreshStyles)
+}
 
-	styleRunning = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorCyan)
+// refreshStyles builds every cached colour and style from the active theme (live theme switching).
+func refreshStyles() {
+	colorBlue, colorGreen, colorRed = theme.BlueV2, theme.GreenV2, theme.RedV2
+	colorAmber, colorMuted, colorSubtle = theme.AmberV2, theme.MutedV2, theme.SubtleV2
 
-	styleFooter = lipgloss.NewStyle().
-			Foreground(colorMuted)
-
-	styleSelected = lipgloss.NewStyle().
-			Background(selectedBg).
-			Foreground(selectedFg).
-			Padding(0, 1)
-
-	styleNormal = lipgloss.NewStyle().
-			Foreground(colorSubtle).
-			Padding(0, 1)
-
-	styleDivider = lipgloss.NewStyle().
-			Foreground(colorMuted)
-
-	styleAmber = lipgloss.NewStyle().
-			Foreground(colorAmber)
-
-	styleRed = lipgloss.NewStyle().
-			Foreground(colorRed)
-
-	styleBlue = lipgloss.NewStyle().
-			Foreground(colorBlue)
-
-	styleMuted = lipgloss.NewStyle().
-			Foreground(colorMuted)
-
-	styleGreen = lipgloss.NewStyle().
-			Foreground(colorGreen)
-
-	panelStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorBlue).
-			Padding(0, 1)
-
-	styleCyan = lipgloss.NewStyle().
-			Foreground(colorCyan)
-)
+	styleHeader = lipgloss.NewStyle().Bold(true).Foreground(colorBlue).Padding(0, 1)
+	styleRunning = lipgloss.NewStyle().Bold(true).Foreground(colorCyan)
+	styleFooter = lipgloss.NewStyle().Foreground(colorMuted)
+	styleSelected = lipgloss.NewStyle().Background(selectedBg).Foreground(selectedFg).Padding(0, 1)
+	styleNormal = lipgloss.NewStyle().Foreground(colorSubtle).Padding(0, 1)
+	styleDivider = lipgloss.NewStyle().Foreground(colorMuted)
+	styleAmber = lipgloss.NewStyle().Foreground(colorAmber)
+	styleRed = lipgloss.NewStyle().Foreground(colorRed)
+	styleBlue = lipgloss.NewStyle().Foreground(colorBlue)
+	styleMuted = lipgloss.NewStyle().Foreground(colorMuted)
+	styleGreen = lipgloss.NewStyle().Foreground(colorGreen)
+	panelStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorBlue).Padding(0, 1)
+	styleCyan = lipgloss.NewStyle().Foreground(colorCyan)
+}
 
 // ── Heat data ─────────────────────────────────────────────────────────────────
 
@@ -113,6 +87,7 @@ var paletteCommands = []palette.Command{
 	{Name: "week", Desc: "Week breakdown", Key: "w"},
 	{Name: "stats", Desc: "Stats (top tasks, streak, earnings)", Key: "v"},
 	{Name: "search", Desc: "Filter by task, project, notes", Key: "/"},
+	{Name: "theme", Desc: "Next colour theme (saved for the whole suite)", Key: "C"},
 	{Name: "help", Desc: "Show help", Key: "?"},
 	{Name: "quit", Desc: "Quit timectl", Key: "q"},
 }
