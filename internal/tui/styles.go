@@ -87,7 +87,7 @@ var paletteCommands = []palette.Command{
 	{Name: "week", Desc: "Week breakdown", Key: "w"},
 	{Name: "stats", Desc: "Stats (top tasks, streak, earnings)", Key: "v"},
 	{Name: "search", Desc: "Filter by task, project, notes", Key: "/"},
-	{Name: "theme", Desc: "Next colour theme (saved for the whole suite)", Key: "C"},
+	{Name: "theme", Desc: "Colour theme picker with live preview (saved for the whole suite)", Key: "C"},
 	{Name: "help", Desc: "Show help", Key: "?"},
 	{Name: "quit", Desc: "Quit timectl", Key: "q"},
 }

@@ -100,7 +100,7 @@ func (m model) helpContent() string {
 		Section("Timer").
 		Row("n", "start new timer (task@project)").
 		Row("T", "task picker — start timer from open taskctl task").
-		Row("C", "next colour theme (saved for the whole suite)").
+		Row("C", "colour theme picker with live preview (saved for the whole suite)").
 		Row("s", "stop running timer").
 		Row("r", "restart selected entry's task").
 		Row("c", "copy selected entry into new-task input").
