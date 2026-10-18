@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/aeon022/missionctl-core/themepicker"
 	"os"
 	"strconv"
 	"time"
@@ -48,7 +49,8 @@ type model struct {
 	filterQ       string
 	running       *models.Entry
 	cursor        int
-	hoverRow      int // m.entries index under the mouse cursor, -1 when none
+	hoverRow      int                // m.entries index under the mouse cursor, -1 when none
+	themePicker   themepicker.Picker // the "C" popup
 	imode         inputMode
 	input         textinput.Model
 	paletteCursor int // index into the filtered palette command matches, valid while imode == modeCommand

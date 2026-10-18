@@ -11,7 +11,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/aeon022/missionctl-core/palette"
-	"github.com/aeon022/missionctl-core/theme"
 	"github.com/aeon022/missionctl-core/ui"
 	"github.com/aeon022/timectl/internal/models"
 	"github.com/aeon022/timectl/internal/store"
@@ -267,6 +266,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
+		if m.themePicker.IsOpen() { // the "C" popup owns the keyboard while it is open
+			if text := m.themePicker.Key(msg.String()); text != "" {
+				m.statusMsg, m.statusTime = text, time.Now()
+			}
+			return m, nil
+		}
 		if m.imode != modeNone {
 			return m.handleInputKey(msg)
 		}
@@ -464,13 +469,8 @@ func (m model) handleNavKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.input.Focus()
 		}
 
-	case "C": // live colour-theme switch ("T" is the task picker); the choice is saved for every suite tool
-		name, err := theme.Cycle()
-		if err != nil {
-			m.errMsg = "Theme: " + err.Error()
-		} else {
-			m.statusMsg, m.statusTime = "Theme: "+name, time.Now()
-		}
+	case "C": // theme picker with live preview ("T" is the task picker); the choice is saved for every suite tool
+		m.themePicker.Open()
 		return m, nil
 
 	case "T":

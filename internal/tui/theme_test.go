@@ -8,22 +8,23 @@ import (
 	"github.com/aeon022/missionctl-core/tuitest"
 )
 
-func TestThemeKeySwitchesLiveAndSaves(t *testing.T) {
+func TestThemeKeyOpensPickerWithLivePreview(t *testing.T) {
 	m := testModel(t, false)
 	orig := theme.Current()
 	t.Cleanup(func() { _ = theme.Apply(orig) })
 
 	before := styleHeader.GetForeground()
 	mm, _ := tuitest.Send(m, tuitest.Key("C"))
-
-	if theme.Current() == orig {
-		t.Fatalf("C must switch to the next theme, still %q", orig)
+	if !strings.Contains(tuitest.Text(mm), "Colour theme") {
+		t.Fatalf("C opens the theme popup:\n%s", tuitest.Text(mm))
 	}
-	if styleHeader.GetForeground() == before {
-		t.Error("cached styles must be rebuilt when the theme changes")
+	mm, _ = tuitest.Send(mm, tuitest.Key("j"))
+	if theme.Current() == orig || styleHeader.GetForeground() == before {
+		t.Error("moving in the popup previews the theme live and rebuilds the cached styles")
 	}
+	mm, _ = tuitest.Send(mm, tuitest.Key("enter"))
 	if got := mm.(model).statusMsg; got != "Theme: "+theme.Current() {
-		t.Errorf("a short confirmation should name the theme, got %q", got)
+		t.Errorf("enter confirms the theme, got %q", got)
 	}
 }
 
