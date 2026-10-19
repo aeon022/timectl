@@ -5,6 +5,7 @@ project_name: timectl
 before:
   hooks:
     - go mod tidy
+    - sh -c 'rm -rf completions && mkdir completions && for s in bash zsh fish; do go run . completion $s > completions/timectl.$s; done'
 
 builds:
   - main: .
@@ -23,6 +24,10 @@ builds:
 archives:
   - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE*
+      - README*
+      - completions/*
 
 checksum:
   name_template: checksums.txt
@@ -48,5 +53,8 @@ brews:
     description: "Terminal time tracker - start/stop timers, weekly breakdown, MCP server"
     install: |
       bin.install "timectl"
+      bash_completion.install "completions/timectl.bash" => "timectl"
+      zsh_completion.install "completions/timectl.zsh" => "_timectl"
+      fish_completion.install "completions/timectl.fish"
     test: |
       system "#{bin}/timectl", "version"

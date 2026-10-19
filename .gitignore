@@ -3,3 +3,4 @@ timectl
 *.db-shm
 *.db-wal
 dist/
+completions/
