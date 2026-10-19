@@ -2,6 +2,16 @@
 
 Terminal-first time tracking for developers. Part of the **missionctl** suite.
 
+![timectl demo](docs/demo.gif)
+
+**Install**
+
+```bash
+brew install aeon022/tap/timectl
+```
+
+Prebuilt binaries for macOS and Linux (arm64, amd64) are on the [Releases](https://github.com/aeon022/timectl/releases) page. Questions: see [SUPPORT.md](SUPPORT.md).
+
 ---
 
 ## Quick Start
